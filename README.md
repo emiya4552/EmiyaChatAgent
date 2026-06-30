@@ -1,4 +1,4 @@
-# EMIYA / charAgent
+# EMIYA / chatAgent
 
 EMIYA 是一个面向角色卡聊天、世界书、记忆、情绪关系和 Prompt 模板编排的 AI Chat 项目。
 
@@ -120,7 +120,6 @@ JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=10080
 ```
 
-不要把真实 `.env` 提交到 Git。
 
 ### 3. 启动后端
 
@@ -182,38 +181,7 @@ http://localhost:5173
 
 ---
 
-## 常用开发命令
 
-后端测试：
-
-```bash
-cd emiya-backend
-pytest
-```
-
-前端构建：
-
-```bash
-cd emiya-frontend
-npm run build
-```
-
-前端测试：
-
-```bash
-cd emiya-frontend
-npm run test
-```
-
-数据库迁移：
-
-```bash
-cd emiya-backend
-alembic revision --autogenerate -m "describe change"
-alembic upgrade head
-```
-
----
 
 ## 关键模块
 
@@ -292,62 +260,7 @@ MacroEngine
 - `emiya-backend/app/services/persona_import_service.py`
 - `emiya-backend/app/services/langgraph/nodes.py`
 
-当前 MVU 兼容属于基础兼容，不是完整复刻 ST 的 JS 运行时。更多设计说明见：
-
-- `docs/mvu/`
-- `docs/adr/0010-mvu-compat-v0.md`
-- `docs/adr/0011-mvu-compat-v1-outline.md`
+当前 MVU 兼容属于基础兼容，不是完整复刻 ST 的 JS 运行时。
 
 ---
 
-## 版本控制建议
-
-本项目变化较快，建议：
-
-- `main` 保持可运行
-- 每个功能开独立分支
-- 每个提交只做一类事情
-- 改数据库模型时同时提交 Alembic migration
-- 改聊天主流程、世界书、Prompt、Memory、SSE 时同步检查 `docs/CODE-MAP.md`
-
-推荐阅读：
-
-- `GIT_VERSION_CONTROL.md`
-
----
-
-## 不要提交的内容
-
-以下内容不应进入 Git：
-
-- `.env`
-- `.env.local`
-- API Key
-- JWT Secret
-- 数据库密码
-- `node_modules/`
-- `dist/`
-- `emiya-backend/uploads/`
-- `.scratch/`
-- 临时测试输出
-
----
-
-## 文档
-
-重要文档：
-
-- `docs/CODE-MAP.md`：代码导航和调用链
-- `docs/adr/`：架构决策记录
-- `docs/mvu/`：MVU / ST 角色卡调研
-- `GIT_VERSION_CONTROL.md`：Git 与 GitHub 使用手册
-
-如果 `docs/` 被 `.gitignore` 忽略，而你希望长期维护项目架构，建议将 `docs/CODE-MAP.md` 和 `docs/adr/` 纳入版本控制。
-
----
-
-## 项目状态说明
-
-EMIYA 当前仍处于快速迭代阶段。很多模块已经具备可用能力，但 MVU 完整兼容、脚本沙箱、小应用系统、消息级变量快照等能力仍适合继续设计和演进。
-
-在进行大重构前，建议先写 ADR 或实现计划，再分支开发。
