@@ -1,0 +1,11 @@
+feat: 好感度系统重构 + 回复长度控制 + 流式优化
+
+- 好感度从数学公式改为 LLM 驱动双向评估 (affinity_score 0-100)
+- 关系键从 conversation_id 改为 user_persona × ai_persona 维度
+- 新增回复长度三档控制 (短/中/长)，注入到用户消息末尾
+- 真流式输出 + SSE 事件推送 (emotion/memory/affinity_update)
+- 摘要增量合并 O(1) + 后台异步更新
+- 记忆提取质量优化 (类型修正/负向规则/动态频率)
+- 前端全线适配 affinity_score
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>

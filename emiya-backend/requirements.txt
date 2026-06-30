@@ -1,0 +1,23 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy[asyncio]==2.0.38
+asyncpg==0.30.0
+alembic==1.14.0
+redis[hiredis]==5.2.1
+python-jose[cryptography]==3.3.0
+bcrypt>=4.1.0
+httpx==0.28.1
+python-dotenv==1.0.0
+pydantic==2.10.5
+pydantic-settings==2.7.0
+tiktoken==0.8.0
+pydantic[email]
+PyYAML>=6.0  # 用于 MVU 兼容架构：解析 <UpdateVariable><initvar>YAML</initvar> 写回（详见 ADR-0010）
+slowapi>=0.1.9  # 登录 / 注册端点的 IP 限流
+chromadb>=0.5.0
+langgraph>=0.2.0
+langchain-core>=0.3.0
+
+# === dev / test ===
+pytest>=8.0
+pytest-asyncio>=0.23

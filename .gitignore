@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE / Editor
+.codebuddy/
+.workbuddy/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Docs (internal design docs, not for public)
+docs/
+
+# Docker volumes
+volumes/
+
+# Alembic (archive old versions if needed)
+# alembic/versions/*.pyc
+
+emiya-backend/uploads/
+generated-images/
+.scratch/
+.agents/
+.claude/
+skills-lock.json
+CONTEXT.md
+CLAUDE.md
+AGENTS.md
+GIT_VERSION_CONTROL.md
