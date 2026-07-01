@@ -35,7 +35,13 @@
           >›</button>
         </div>
       </div>
-      <div v-if="message.role === 'user'" class="avatar user-avatar" :style="{ background: userAvatarColor(authStore.user?.nickname || '我') }">
+      <img
+        v-if="message.role === 'user' && authStore.user?.avatar_url"
+        class="avatar user-avatar"
+        :src="authStore.user.avatar_url"
+        :alt="authStore.user.nickname || '用户'"
+      />
+      <div v-else-if="message.role === 'user'" class="avatar user-avatar" :style="{ background: userAvatarColor(authStore.user?.nickname || '我') }">
         {{ authStore.user?.nickname?.charAt(0) || '我' }}
       </div>
     </div>
@@ -149,6 +155,7 @@ const formattedTime = computed(() => {
 }
 .user-avatar {
   font-size: 14px;
+  object-fit: cover;
 }
 .bubble-content {
   padding: 10px 14px;
