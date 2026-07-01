@@ -53,6 +53,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { NForm, NFormItem, NInput, NButton, useMessage } from 'naive-ui'
+import type { FormRules } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
@@ -68,7 +69,7 @@ const form = ref({
 })
 const loading = ref(false)
 
-const rules = {
+const rules: FormRules = {
   email: [
     { required: true, message: '请输入邮箱', trigger: 'blur' },
     { type: 'email', message: '邮箱格式不正确', trigger: 'blur' },

@@ -72,13 +72,6 @@
       </router-link>
     </div>
 
-    <div class="sidebar-divider" />
-
-    <div class="sidebar-footer">
-      <n-button text @click="showThemeModal = true">主题</n-button>
-      <n-button text @click="handleLogout">退出登录</n-button>
-    </div>
-
     <n-modal :show="showDialog" @update:show="showDialog = $event">
       <div class="dialog-card">
         <h3 class="dialog-title">新建对话</h3>
@@ -144,8 +137,6 @@
       </div>
     </n-modal>
 
-    <!-- 用户级 CSS 主题编辑器（详见 docs/adr/0008） -->
-    <ThemeEditorModal :show="showThemeModal" @close="showThemeModal = false" />
   </div>
 </template>
 
@@ -154,7 +145,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NDropdown, NIcon, NInput, NModal, NSelect, useMessage } from 'naive-ui'
 import { BookOutline, PeopleOutline, StatsChartOutline, OptionsOutline, CodeSlash, LayersOutline, EarthOutline } from '@vicons/ionicons5'
-import { useAuthStore } from '../../stores/auth'
 import { useConversationStore } from '../../stores/conversation'
 import { useChatStore } from '../../stores/chat'
 import { fetchPersonas, fetchPersonaDetail } from '../../api/persona'
@@ -162,12 +152,10 @@ import { fetchPresets } from '../../api/preset'
 import { fetchTemplates } from '../../api/template'
 import { fetchWorldbooks } from '../../api/worldbook'
 import { fetchRegexPresets } from '../../api/regexPreset'
-import ThemeEditorModal from './ThemeEditorModal.vue'
 import { avatarColor } from '../../utils/avatar'
 import type { PersonaListItem, PresetInfo, TemplateListItem, WorldbookListItem, RegexPresetInfo } from '../../types'
 
 const router = useRouter()
-const authStore = useAuthStore()
 const convStore = useConversationStore()
 const chatStore = useChatStore()
 const message = useMessage()
@@ -176,7 +164,6 @@ const NONE_PRESET = '__none__'
 const NONE_TEMPLATE = '__none__'
 
 const showDialog = ref(false)
-const showThemeModal = ref(false)
 const selectedPersonaId = ref<string | null>(null)
 const selectedUserPersonaId = ref<string | null>(null)
 const selectedPreset = ref<string>(NONE_PRESET)
@@ -394,10 +381,6 @@ async function handleConvMenu(key: string, conv: { id: string }) {
   }
 }
 
-function handleLogout() {
-  authStore.logout()
-  router.push('/login')
-}
 </script>
 
 <style scoped>
@@ -523,19 +506,6 @@ function handleLogout() {
 .nav-item.router-link-active {
   color: var(--color-primary);
   background: var(--color-sidebar-active);
-}
-
-.sidebar-divider {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.08);
-  margin: 0 12px;
-}
-
-.sidebar-footer {
-  padding: 12px 16px;
-  display: flex;
-  gap: 16px;
-  align-items: center;
 }
 
 .dialog-card {

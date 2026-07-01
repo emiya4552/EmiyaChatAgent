@@ -47,6 +47,19 @@ class UserUpdateRequest(BaseModel):
     css_theme: str | None = Field(None, description="用户级 CSS 主题（None 清空，详见 ADR-0008）")
 
 
+class UserSessionResponse(BaseModel):
+    """用户会话响应。"""
+    id: UUID
+    device_label: str
+    ip_address: str | None = None
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    is_current: bool = False
+    status: str
+
+
 class TokenResponse(BaseModel):
     """JWT 令牌响应。"""
     access_token: str

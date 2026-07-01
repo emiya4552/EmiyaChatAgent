@@ -10,6 +10,8 @@ import logging
 import os
 import shutil
 import uuid as _uuid
+from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from pydantic import BaseModel, Field
@@ -19,7 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.auth import get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import UserResponse, UserUpdateRequest
+from app.models.user_session import UserSession
+from app.schemas.auth import UserResponse, UserSessionResponse, UserUpdateRequest
+from app.services.session_service import (
+    list_user_sessions,
+    revoke_current_session,
+    revoke_other_sessions,
+    revoke_user_session,
+)
 from app.utils.exceptions import AppException
 from app.utils.security import hash_password, verify_password
 
@@ -35,6 +44,39 @@ PERSONA_AVATAR_DIR = os.path.join(_BACKEND_ROOT, "uploads", "avatars")
 
 ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 2 MB
+
+
+def _current_session_id(current_user: User) -> UUID | None:
+    return getattr(current_user, "_current_session_id", None)
+
+
+def _session_status(session: UserSession) -> str:
+    now = datetime.now(timezone.utc)
+    expires_at = session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if session.revoked_at is not None:
+        return "revoked"
+    if expires_at <= now:
+        return "expired"
+    return "active"
+
+
+def _session_to_response(
+    session: UserSession,
+    current_session_id: UUID | None,
+) -> UserSessionResponse:
+    return UserSessionResponse(
+        id=session.id,
+        device_label=session.device_label,
+        ip_address=session.ip_address,
+        created_at=session.created_at,
+        last_seen_at=session.last_seen_at,
+        expires_at=session.expires_at,
+        revoked_at=session.revoked_at,
+        is_current=current_session_id == session.id,
+        status=_session_status(session),
+    )
 
 
 @router.patch("/me", response_model=UserResponse)
@@ -93,6 +135,50 @@ async def upload_user_avatar(
     await db.commit()
     await db.refresh(current_user)
     return UserResponse.model_validate(current_user)
+
+
+@router.get("/me/sessions", response_model=list[UserSessionResponse])
+async def list_my_sessions(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """列出当前账号的登录会话。"""
+    current_sid = _current_session_id(current_user)
+    sessions = await list_user_sessions(db, current_user.id)
+    return [_session_to_response(s, current_sid) for s in sessions]
+
+
+@router.delete("/me/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_my_session(
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """撤销一个其他登录会话。"""
+    await revoke_user_session(db, current_user.id, session_id, _current_session_id(current_user))
+
+
+class RevokeOtherSessionsResponse(BaseModel):
+    revoked: int
+
+
+@router.post("/me/sessions/revoke-others", response_model=RevokeOtherSessionsResponse)
+async def revoke_my_other_sessions(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """撤销当前设备之外的所有有效登录会话。"""
+    revoked = await revoke_other_sessions(db, current_user.id, _current_session_id(current_user))
+    return RevokeOtherSessionsResponse(revoked=revoked)
+
+
+@router.post("/me/sessions/revoke-current", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_my_current_session(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """撤销当前登录会话。"""
+    await revoke_current_session(db, current_user.id, _current_session_id(current_user))
 
 
 class ChangePasswordRequest(BaseModel):

@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import User
 from app.utils.exceptions import AuthException
 from app.utils.security import (
-    create_access_token,
     hash_password,
     verify_password,
 )
@@ -19,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 async def register_user(
     db: AsyncSession, email: str, password: str, nickname: str
-) -> tuple[User, str]:
-    """注册新用户，检查邮箱唯一性后创建用户并返回 JWT。
+) -> User:
+    """注册新用户，检查邮箱唯一性后创建用户。
 
     Args:
         db: 数据库会话。
@@ -29,7 +28,7 @@ async def register_user(
         nickname: 用户昵称。
 
     Returns:
-        (用户对象, JWT 令牌) 元组。
+        用户对象。
 
     Raises:
         AuthException: 邮箱已被注册。
@@ -53,13 +52,12 @@ async def register_user(
 
     await db.refresh(user)
 
-    token = create_access_token(str(user.id))
-    return user, token
+    return user
 
 
 async def authenticate_user(
     db: AsyncSession, email: str, password: str
-) -> tuple[User, str] | None:
+) -> User | None:
     """验证用户登录凭据。
 
     Args:
@@ -68,7 +66,7 @@ async def authenticate_user(
         password: 明文密码。
 
     Returns:
-        验证成功返回 (用户对象, JWT 令牌)，失败返回 None。
+        验证成功返回 User，失败返回 None。
     """
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
@@ -76,8 +74,7 @@ async def authenticate_user(
     if user is None or not verify_password(password, user.password_hash):
         return None
 
-    token = create_access_token(str(user.id))
-    return user, token
+    return user
 
 
 async def get_user_by_id(db: AsyncSession, user_id: str) -> User | None:
