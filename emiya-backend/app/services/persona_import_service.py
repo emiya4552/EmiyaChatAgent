@@ -89,7 +89,7 @@ class CardParser:
             raise ValueError("不是有效的 PNG 文件")
 
         TEXT_CHUNK = b'tEXt'
-        candidates: list[tuple[str, str]] = []
+        candidates: list[tuple[str, str]] = [] # 存放候选数据
 
         while True:
             header = stream.read(8)
