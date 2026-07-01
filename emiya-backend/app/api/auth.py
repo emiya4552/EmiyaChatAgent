@@ -10,6 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.utils.limiter import limiter
 from app.schemas.auth import (
+    ForgotPasswordRequest,
+    MessageResponse,
+    ResetPasswordRequest,
     TokenResponse,
     UserLoginRequest,
     UserRegisterRequest,
@@ -26,6 +29,7 @@ from app.services.session_service import (
     get_active_session,
     touch_session,
 )
+from app.services.password_reset_service import request_password_reset, reset_password
 from app.utils.exceptions import AuthException
 from app.utils.security import create_access_token, decode_access_token
 
@@ -102,6 +106,30 @@ async def login(
         access_token=token,
         user=UserResponse.model_validate(user),
     )
+
+
+@router.post("/forgot-password", response_model=MessageResponse)
+@limiter.limit("3/minute")
+async def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """发送找回密码邮件。响应不暴露邮箱是否存在。"""
+    await request_password_reset(db, body.email)
+    return MessageResponse(message="如果邮箱存在，重置邮件已发送")
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+@limiter.limit("5/minute")
+async def reset_password_by_token(
+    request: Request,
+    body: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """使用邮件链接令牌重置密码。"""
+    await reset_password(db, body.token, body.new_password)
+    return MessageResponse(message="密码已重置，请重新登录")
 
 
 @router.get("/me", response_model=UserResponse)

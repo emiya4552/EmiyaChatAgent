@@ -5,6 +5,7 @@ from app.models.conversation import Conversation
 from app.models.emotion_record import EmotionRecord
 from app.models.memory import Memory
 from app.models.message import Message
+from app.models.password_reset_token import PasswordResetToken
 from app.models.persona import Persona
 from app.models.preset import Preset
 from app.models.prompt_template import PromptTemplate
@@ -20,6 +21,7 @@ __all__ = [
     "EmotionRecord",
     "Memory",
     "Message",
+    "PasswordResetToken",
     "Persona",
     "Preset",
     "PromptTemplate",
