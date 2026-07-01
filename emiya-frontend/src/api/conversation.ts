@@ -93,3 +93,9 @@ export async function clearConversationVariables(convId: string): Promise<Conver
   const res = await api.delete(`/v1/conversations/${convId}/variables`)
   return res.data
 }
+
+// POST /v1/conversations/{id}/variables/reload-mvu-initial-state — 缺失合并式重载 MVU 初始状态
+export async function reloadMvuInitialState(convId: string): Promise<Conversation> {
+  const res = await api.post(`/v1/conversations/${convId}/variables/reload-mvu-initial-state`)
+  return res.data
+}

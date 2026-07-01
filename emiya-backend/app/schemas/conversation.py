@@ -69,6 +69,8 @@ class ConversationResponse(BaseModel):
     reply_length_enabled: bool = True
     # MVU 对话级变量桶（详见 ADR-0007）；只读暴露给前端展示，写入由宏机制完成
     variables: dict = {}
+    # MVU 初始化/重载状态摘要（详见 docs/mvu/adr/0002）
+    mvu_state: dict | None = None
     created_at: datetime
     updated_at: datetime
 

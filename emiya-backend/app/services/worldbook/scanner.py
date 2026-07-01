@@ -40,6 +40,7 @@ class ActiveEntry:
     role: str
     outlet_name: str | None
     content: str
+    entry_lookup: dict[str, str] = field(default_factory=dict)
 
     def __repr__(self) -> str:
         comment = self.entry.get("comment") or self.entry.get("content", "")[:20]
@@ -160,6 +161,26 @@ def _build_scan_buffer(
     return "\x01" + "\n\x01".join((m.get("content") or "").strip() for m in slice_)
 
 
+def _build_entry_lookup(entries: Iterable[dict]) -> dict[str, str]:
+    """Build the controlled `getwi(null, "entry name")` lookup for one book."""
+    lookup: dict[str, str] = {}
+    for entry in entries:
+        if not entry.get("enabled", True) or entry.get("disable") is True:
+            continue
+        content = entry.get("content") or ""
+        if not content.strip():
+            continue
+        for key in (
+            entry.get("comment"),
+            entry.get("name"),
+            entry.get("title"),
+            entry.get("uid"),
+        ):
+            if key is not None:
+                lookup.setdefault(str(key), content)
+    return lookup
+
+
 def scan_worldbook(
     worldbooks: list[dict],
     history_messages: list[dict],
@@ -199,6 +220,8 @@ def scan_worldbook(
     for book in worldbooks:
         book_id = str(book.get("id"))
         book_name = book.get("name", "")
+        entries = book.get("entries", []) or []
+        entry_lookup = _build_entry_lookup(entries)
         book_default = {
             "scan_depth": book.get(
                 "scan_depth", settings.WORLDBOOK_DEFAULT_SCAN_DEPTH
@@ -207,7 +230,7 @@ def scan_worldbook(
             "match_whole_words": book.get("match_whole_words", False),
         }
 
-        for idx, entry in enumerate(book.get("entries", []) or []):
+        for idx, entry in enumerate(entries):
             if not entry.get("enabled", True):
                 continue
             if entry.get("disable") is True:  # ST 兼容字段名
@@ -246,6 +269,7 @@ def scan_worldbook(
                 role=str(entry.get("role", "system")),
                 outlet_name=entry.get("outlet_name") or None,
                 content=content,
+                entry_lookup=entry_lookup,
             )
             candidates.append((ae.order, idx, ae))
 

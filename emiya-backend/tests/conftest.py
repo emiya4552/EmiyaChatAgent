@@ -49,7 +49,7 @@ async def clean_db(setup_schema):
                 emotion_records, memories, relationships, messages,
                 password_reset_tokens, user_sessions,
                 conversations, presets, prompt_templates, regex_presets,
-                personas, users
+                worldbooks, personas, users
             RESTART IDENTITY CASCADE
         """))
         await session.commit()

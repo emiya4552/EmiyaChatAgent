@@ -105,6 +105,16 @@
           <code v-pre>{{setvar}}</code> / <code v-pre>{{incvar}}</code>
           等宏在每轮对话中读写；只对当前对话有效。如发现变量被脚本写坏，可整体重置。
         </p>
+        <div v-if="mvuState?.initialized || mvuState?.source_count" class="mvu-state">
+          <div class="mvu-state-row">
+            <span>初始化源 {{ mvuState.source_count }}</span>
+            <span>字段 {{ mvuState.field_count }}</span>
+            <span v-if="mvuState.last_reload_at">最近重载 {{ formatDateTime(mvuState.last_reload_at) }}</span>
+          </div>
+          <p v-if="mvuState.warnings?.length" class="mvu-warning">
+            {{ mvuState.warnings[0] }}
+          </p>
+        </div>
         <div v-if="variablesEntries.length === 0" class="empty-vars">
           当前对话尚未设置任何变量
         </div>
@@ -119,6 +129,14 @@
           </div>
         </div>
         <div class="vars-actions">
+          <n-button
+            v-if="showMvuActions"
+            size="small"
+            :loading="reloadingVars"
+            @click="reloadInitialState"
+          >
+            补全缺失初始变量
+          </n-button>
           <n-button
             v-if="variablesEntries.length > 0"
             size="small"
@@ -182,6 +200,7 @@ import {
 import { useConversationStore } from '../../stores/conversation'
 import {
   updateConversationConfig, updateConversationToggles, clearConversationVariables,
+  reloadMvuInitialState,
   applyPreset, switchTemplate, switchRegexPreset,
 } from '../../api/conversation'
 import {
@@ -253,6 +272,12 @@ const variablesEntries = computed<[string, unknown][]>(() => {
 })
 const variablesCount = computed(() => variablesEntries.value.length)
 const resettingVars = ref(false)
+const reloadingVars = ref(false)
+const mvuState = computed(() => currentConv.value?.mvu_state || null)
+const showMvuActions = computed(() => {
+  const state = mvuState.value
+  return Boolean(state?.initialized || state?.source_count || variablesCount.value > 0)
+})
 
 function formatVarValue(v: unknown): string {
   if (v === null) return 'null'
@@ -265,6 +290,12 @@ function formatVarValue(v: unknown): string {
   }
 }
 
+function formatDateTime(v: string): string {
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return v
+  return d.toLocaleString()
+}
+
 async function resetVariables() {
   const convId = convStore.currentId
   if (!convId) return
@@ -273,13 +304,35 @@ async function resetVariables() {
     const updated = await clearConversationVariables(convId)
     const idx = convStore.list.findIndex(c => c.id === convId)
     if (idx !== -1) {
-      convStore.list[idx] = { ...convStore.list[idx], variables: updated.variables }
+      convStore.list[idx] = {
+        ...convStore.list[idx],
+        variables: updated.variables,
+        mvu_state: updated.mvu_state,
+      }
     }
     message.success('对话状态变量已重置')
   } catch (err: any) {
     message.error(err.response?.data?.detail || '重置失败')
   } finally {
     resettingVars.value = false
+  }
+}
+
+async function reloadInitialState() {
+  const convId = convStore.currentId
+  if (!convId) return
+  reloadingVars.value = true
+  try {
+    const updated = await reloadMvuInitialState(convId)
+    const idx = convStore.list.findIndex(c => c.id === convId)
+    if (idx !== -1) {
+      convStore.list[idx] = { ...convStore.list[idx], ...updated }
+    }
+    message.success('已补全缺失的 MVU 初始变量')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '补全失败')
+  } finally {
+    reloadingVars.value = false
   }
 }
 
@@ -486,5 +539,24 @@ async function handleSave() {
   font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.vars-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.vars-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.mvu-state {
+  border: 1px solid var(--color-border, #eee);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  background: var(--color-bg-surface-elevated, #fafafa);
+}
+.mvu-state-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.mvu-warning {
+  margin: 6px 0 0;
+  color: #d03050;
+  font-size: 12px;
+}
 </style>

@@ -62,6 +62,8 @@ class PersonaResponse(BaseModel):
     css_theme: str | None = None
     # MVU 兼容标记（详见 ADR-0010）
     uses_mvu: bool = False
+    # MVU 兼容性诊断报告（详见 docs/mvu/adr/0002）
+    mvu_compatibility: dict | None = None
     created_at: datetime
     updated_at: datetime | None = None
 

@@ -29,9 +29,11 @@ from app.services.conversation_service import (
     get_conversation_by_id,
     get_conversation_messages,
     get_user_conversations,
+    reload_conversation_mvu_initial_state,
     update_conversation_config,
 )
 from app.config import settings
+from app.services.mvu_runtime import describe_conversation_mvu_state
 from app.services.regex_preset_service import get_active_scripts
 from app.utils.exceptions import NotFoundException
 
@@ -88,6 +90,7 @@ def _conv_to_response(c, reply_length_enabled: bool = True):
         analyze_emotion=c.analyze_emotion,
         reply_length_enabled=reply_length_enabled,
         variables=c.variables or {},
+        mvu_state=describe_conversation_mvu_state(c.variables or {}),
         created_at=c.created_at,
         updated_at=c.updated_at,
     )
@@ -466,6 +469,25 @@ async def clear_conversation_variables(
     db.add(conv)
     await db.commit()
     conv = await get_conversation_by_id(db, conversation_id, current_user.id)
+    return await _conv_to_response_with_derived(conv, db)
+
+
+@router.post("/{conversation_id}/variables/reload-mvu-initial-state", response_model=ConversationResponse)
+async def reload_mvu_initial_state(
+    conversation_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """缺失合并式重载 MVU 初始状态。
+
+    从当前角色卡和绑定世界书的 [opening]/[initvar] 条目重新读取初始值，
+    只填补缺失字段，不覆盖用户/LLM 已写过的字段。
+    """
+    conv = await reload_conversation_mvu_initial_state(
+        db, conversation_id, current_user.id,
+    )
+    if conv is None:
+        raise NotFoundException("对话不存在")
     return await _conv_to_response_with_derived(conv, db)
 
 
