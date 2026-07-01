@@ -11,6 +11,7 @@ from app.models.prompt_template import PromptTemplate
 from app.models.regex_preset import RegexPreset
 from app.models.relationship import Relationship
 from app.models.user import User
+from app.models.user_session import UserSession
 from app.models.worldbook import Worldbook
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "RegexPreset",
     "Relationship",
     "User",
+    "UserSession",
     "Worldbook",
 ]

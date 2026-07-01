@@ -36,11 +36,16 @@ def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password_bytes, hashed.encode("utf-8"))
 
 
-def create_access_token(user_id: str, expires_delta: timedelta | None = None) -> str:
+def create_access_token(
+    user_id: str,
+    session_id: str,
+    expires_delta: timedelta | None = None,
+) -> str:
     """创建 JWT 访问令牌。
 
     Args:
         user_id: 用户 ID。
+        session_id: 用户会话 ID。
         expires_delta: 过期时间增量，默认使用配置的 ACCESS_TOKEN_EXPIRE_MINUTES。
 
     Returns:
@@ -53,6 +58,7 @@ def create_access_token(user_id: str, expires_delta: timedelta | None = None) ->
     )
     payload = {
         "sub": user_id,
+        "sid": session_id,
         "exp": expire,
         "iat": datetime.now(timezone.utc),
     }

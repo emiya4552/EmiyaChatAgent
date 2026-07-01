@@ -62,7 +62,7 @@ function handleLoadEarlier() {
 }
 
 watch(
-  () => [chatStore.messages.length, chatStore.streamingContent.value],
+  () => [chatStore.messages.length, chatStore.streamingContent],
   async () => {
     await nextTick()
     if (listRef.value) {

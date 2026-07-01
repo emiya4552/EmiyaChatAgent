@@ -22,14 +22,15 @@ function _utf8ToBase64(s: string): string {
 }
 
 const _defaultCodeRenderer = renderer.code.bind(renderer)
-renderer.code = function ({ text, lang, escaped }: { text: string; lang?: string; escaped?: boolean }) {
+renderer.code = function (token: any) {
+  const { text, lang } = token
   // 与酒馆助手 isFrontend 一致：只看 text 含 html>/<head>/<body 任一即视为前端代码块，
   // 不要求 lang 必须是 "html"（卡作者写 ```、```HTML、``` 都见过；放宽提升命中率）
   if (_isFrontendHtml(text)) {
     const b64 = _utf8ToBase64(text)
     return `<div class="th-html-render" data-content="${b64}"></div>`
   }
-  return _defaultCodeRenderer({ text, lang, escaped })
+  return _defaultCodeRenderer(token)
 }
 
 marked.setOptions({
@@ -42,7 +43,7 @@ marked.setOptions({
     }
     return hljs.highlightAuto(code).value
   },
-})
+} as any)
 
 // ─── DOMPurify hooks（仅初始化一次） ───
 

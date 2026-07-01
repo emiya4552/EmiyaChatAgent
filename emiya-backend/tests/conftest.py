@@ -13,6 +13,7 @@ import os
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://emiya:emiya_dev_2026@localhost:5432/emiya_test"
 
 import uuid
+from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
@@ -27,8 +28,9 @@ from app.models import Base
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def setup_schema():
-    """启动时建表（不依赖 alembic）。session 结束不 drop，保留给下次复用。"""
+    """启动时重建测试库 schema（不依赖 alembic）。"""
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield
 
@@ -42,7 +44,7 @@ async def clean_db(setup_schema):
     async with AsyncSessionLocal() as session:
         await session.execute(text("""
             TRUNCATE TABLE
-                emotion_records, memories, relationships, messages,
+                emotion_records, memories, relationships, messages, user_sessions,
                 conversations, presets, prompt_templates, regex_presets,
                 personas, users
             RESTART IDENTITY CASCADE
@@ -119,7 +121,7 @@ def mock_deepseek_normal(monkeypatch):
 
     # call_deepseek_non_stream 各 use site
     monkeypatch.setattr("app.services.llm_service.call_deepseek_non_stream", _emit_json)
-    monkeypatch.setattr("app.services.langgraph.nodes.call_deepseek_non_stream", _emit_json)
+    monkeypatch.setattr("app.services.langgraph.nodes.call_deepseek_non_stream", _emit_json, raising=False)
     monkeypatch.setattr("app.services.emotion_service.call_deepseek_non_stream", _emit_json)
     monkeypatch.setattr("app.services.memory.extraction.call_deepseek_non_stream", _emit_json)
     monkeypatch.setattr("app.services.context_service.call_deepseek_non_stream", _emit_json)
@@ -140,7 +142,7 @@ def mock_deepseek_interrupt_after_2(monkeypatch):
     monkeypatch.setattr("app.services.llm_service.call_deepseek_stream", _emit_then_raise)
     monkeypatch.setattr("app.services.chat_service.call_deepseek_stream", _emit_then_raise)
     monkeypatch.setattr("app.services.llm_service.call_deepseek_non_stream", _emit_json)
-    monkeypatch.setattr("app.services.langgraph.nodes.call_deepseek_non_stream", _emit_json)
+    monkeypatch.setattr("app.services.langgraph.nodes.call_deepseek_non_stream", _emit_json, raising=False)
     monkeypatch.setattr("app.services.emotion_service.call_deepseek_non_stream", _emit_json)
     monkeypatch.setattr("app.services.memory.extraction.call_deepseek_non_stream", _emit_json)
     monkeypatch.setattr("app.services.context_service.call_deepseek_non_stream", _emit_json)
@@ -201,10 +203,24 @@ async def test_conversation(test_user, test_persona):
 # ─── HTTP client fixtures ─────────────────────────────────────
 
 
-@pytest.fixture
-def auth_headers(test_user):
+@pytest_asyncio.fixture
+async def auth_headers(test_user):
     from app.utils.security import create_access_token
-    token = create_access_token(str(test_user.id))
+    from app.models.user_session import UserSession
+
+    async with AsyncSessionLocal() as session:
+        user_session = UserSession(
+            id=uuid.uuid4(),
+            user_id=test_user.id,
+            user_agent="pytest",
+            device_label="pytest",
+            ip_address="127.0.0.1",
+            last_seen_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        session.add(user_session)
+        await session.commit()
+    token = create_access_token(str(test_user.id), str(user_session.id), expires_delta=timedelta(days=1))
     return {"Authorization": f"Bearer {token}"}
 
 

@@ -275,13 +275,13 @@ const effectiveScanDepth = computed<number | null>({
   get: () => (props.entry?.scan_depth ?? props.bookDefaults.scan_depth),
   set: (v) => { if (props.entry) props.entry.scan_depth = v },
 })
-const effectiveCaseSensitive = computed<boolean | null>({
-  get: () => (props.entry?.case_sensitive ?? props.bookDefaults.case_sensitive),
-  set: (v) => { if (props.entry) props.entry.case_sensitive = v },
+const effectiveCaseSensitive = computed<string | null>({
+  get: () => String(props.entry?.case_sensitive ?? props.bookDefaults.case_sensitive),
+  set: (v) => { if (props.entry) props.entry.case_sensitive = v === null ? null : v === 'true' },
 })
-const effectiveMatchWholeWords = computed<boolean | null>({
-  get: () => (props.entry?.match_whole_words ?? props.bookDefaults.match_whole_words),
-  set: (v) => { if (props.entry) props.entry.match_whole_words = v },
+const effectiveMatchWholeWords = computed<string | null>({
+  get: () => String(props.entry?.match_whole_words ?? props.bookDefaults.match_whole_words),
+  set: (v) => { if (props.entry) props.entry.match_whole_words = v === null ? null : v === 'true' },
 })
 
 const LOGIC_OPTIONS = [
@@ -309,8 +309,8 @@ const ROLE_OPTIONS = [
 ]
 
 const TRIBOOL_OPTIONS = [
-  { label: '是', value: true },
-  { label: '否', value: false },
+  { label: '是', value: 'true' },
+  { label: '否', value: 'false' },
 ]
 </script>
 

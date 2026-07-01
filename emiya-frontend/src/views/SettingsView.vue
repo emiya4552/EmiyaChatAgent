@@ -79,6 +79,28 @@
               关闭后退回原始代码块。详见 ADR-0012。
             </p>
           </div>
+
+          <n-divider />
+
+          <div class="section">
+            <h3 class="section-title">全局 CSS 主题</h3>
+            <p class="hint">
+              这里写的 CSS 对所有对话生效；角色卡自带样式会在全局样式之后注入，因此可以覆盖这里的规则。
+            </p>
+            <n-input
+              v-model:value="cssTheme"
+              type="textarea"
+              :autosize="{ minRows: 12, maxRows: 24 }"
+              placeholder="/* 示例：状态栏样式 */"
+              class="css-input"
+            />
+            <div class="actions">
+              <n-button :disabled="!hasCssTheme" @click="clearCssTheme">清空主题</n-button>
+              <n-button type="primary" :loading="savingCssTheme" @click="saveCssTheme">
+                保存主题
+              </n-button>
+            </div>
+          </div>
         </n-tab-pane>
 
         <!-- ───── Tab 3: 安全 ───── -->
@@ -117,12 +139,81 @@
               </div>
             </n-form>
             <p class="hint">
-              提示：MVP 阶段修改密码不会强制旧登录会话失效，旧 token 自然过期。
+              提示：后续阶段会把修改密码升级为撤销所有登录设备并要求重新登录。
             </p>
+          </div>
+
+          <n-divider />
+
+          <div class="section">
+            <h3 class="section-title">退出当前登录</h3>
+            <p class="hint">撤销当前设备的登录状态，并返回登录页。</p>
+            <div class="actions">
+              <n-button :loading="loggingOutCurrent" @click="logoutCurrent">
+                退出当前登录
+              </n-button>
+            </div>
           </div>
         </n-tab-pane>
 
-        <!-- ───── Tab 4: 危险区 ───── -->
+        <!-- ───── Tab 4: 登录设备 ───── -->
+        <n-tab-pane name="sessions" tab="登录设备">
+          <div class="section">
+            <div class="section-heading-row">
+              <h3 class="section-title">当前可登录设备</h3>
+              <n-button size="small" :loading="loadingSessions" @click="loadSessions">
+                刷新
+              </n-button>
+            </div>
+            <p class="hint">
+              这里列出仍可访问账号的登录会话。你可以移除其他设备，或一次性退出所有其他设备。
+            </p>
+            <div class="actions">
+              <n-button
+                type="warning"
+                :disabled="!hasOtherActiveSessions"
+                :loading="revokingOthers"
+                @click="revokeOthers"
+              >
+                退出所有其他设备
+              </n-button>
+            </div>
+
+            <div class="session-list">
+              <div v-for="s in sessions" :key="s.id" class="session-item">
+                <div class="session-main">
+                  <div class="session-title">
+                    <span>{{ s.device_label }}</span>
+                    <n-tag v-if="s.is_current" size="small" type="success">当前设备</n-tag>
+                    <n-tag v-else-if="s.status === 'revoked'" size="small" type="default">已撤销</n-tag>
+                    <n-tag v-else-if="s.status === 'expired'" size="small" type="warning">已过期</n-tag>
+                  </div>
+                  <div class="session-meta">
+                    <span>IP：{{ s.ip_address || '未知' }}</span>
+                    <span>登录：{{ formatDate(s.created_at) }}</span>
+                    <span>最近活跃：{{ formatDate(s.last_seen_at) }}</span>
+                    <span>过期：{{ formatDate(s.expires_at) }}</span>
+                  </div>
+                </div>
+                <n-button
+                  v-if="!s.is_current && s.status === 'active'"
+                  size="small"
+                  type="error"
+                  tertiary
+                  :loading="revokingSessionId === s.id"
+                  @click="revokeSession(s.id)"
+                >
+                  移除
+                </n-button>
+              </div>
+              <p v-if="!loadingSessions && sessions.length === 0" class="hint">
+                暂无登录设备记录。
+              </p>
+            </div>
+          </div>
+        </n-tab-pane>
+
+        <!-- ───── Tab 5: 危险区 ───── -->
         <n-tab-pane name="danger" tab="危险区">
           <div class="section danger-section">
             <h3 class="section-title danger-title">⚠ 注销账号</h3>
@@ -167,11 +258,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NButton, NDivider, NForm, NFormItem, NIcon, NInput, NSwitch,
-  NTabPane, NTabs, NUpload, useDialog, useMessage,
+  NTabPane, NTag, NTabs, NUpload, useDialog, useMessage,
 } from 'naive-ui'
 import {
   isHtmlIframeRenderEnabled, setHtmlIframeRenderEnabled,
@@ -179,9 +270,18 @@ import {
 import type { UploadCustomRequestOptions } from 'naive-ui'
 import { ArrowBackOutline } from '@vicons/ionicons5'
 import { useAuthStore } from '../stores/auth'
-import { uploadAvatar, changePassword, deleteMyAccount } from '../api/user'
+import {
+  uploadAvatar,
+  changePassword,
+  deleteMyAccount,
+  fetchUserSessions,
+  revokeCurrentSession,
+  revokeOtherSessions,
+  revokeUserSession,
+} from '../api/user'
 import { avatarColor } from '../utils/avatar'
 import PageShell from '../components/layout/PageShell.vue'
+import type { UserSession } from '../types'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -193,9 +293,38 @@ const avatarUrl = computed(() => user.value?.avatar_url || null)
 
 // ── 显示偏好 ──
 const renderHtmlIframe = ref(isHtmlIframeRenderEnabled())
+const cssTheme = ref(user.value?.css_theme || '')
+const savingCssTheme = ref(false)
+const hasCssTheme = computed(() => !!cssTheme.value.trim())
+
 function onRenderHtmlIframeChange(v: boolean) {
   setHtmlIframeRenderEnabled(v)
   message.success(v ? '已开启前端代码块渲染' : '已关闭前端代码块渲染')
+}
+
+async function saveCssTheme() {
+  savingCssTheme.value = true
+  try {
+    await authStore.updateMe({ css_theme: cssTheme.value })
+    message.success('全局 CSS 主题已保存')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingCssTheme.value = false
+  }
+}
+
+async function clearCssTheme() {
+  savingCssTheme.value = true
+  try {
+    await authStore.updateMe({ css_theme: '' })
+    cssTheme.value = ''
+    message.success('全局 CSS 主题已清空')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '清空失败')
+  } finally {
+    savingCssTheme.value = false
+  }
 }
 
 // ── 资料 ──
@@ -300,6 +429,73 @@ async function submitChangePassword() {
   }
 }
 
+// ── 登录设备 ──
+const sessions = ref<UserSession[]>([])
+const loadingSessions = ref(false)
+const revokingSessionId = ref<string | null>(null)
+const revokingOthers = ref(false)
+const loggingOutCurrent = ref(false)
+
+const hasOtherActiveSessions = computed(() =>
+  sessions.value.some(s => !s.is_current && s.status === 'active')
+)
+
+function formatDate(s: string): string {
+  return new Date(s).toLocaleString()
+}
+
+async function loadSessions() {
+  loadingSessions.value = true
+  try {
+    sessions.value = await fetchUserSessions()
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '加载登录设备失败')
+  } finally {
+    loadingSessions.value = false
+  }
+}
+
+async function revokeSession(sessionId: string) {
+  revokingSessionId.value = sessionId
+  try {
+    await revokeUserSession(sessionId)
+    message.success('已移除该设备')
+    await loadSessions()
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '移除失败')
+  } finally {
+    revokingSessionId.value = null
+  }
+}
+
+async function revokeOthers() {
+  revokingOthers.value = true
+  try {
+    const res = await revokeOtherSessions()
+    message.success(`已退出 ${res.revoked} 个其他设备`)
+    await loadSessions()
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '操作失败')
+  } finally {
+    revokingOthers.value = false
+  }
+}
+
+async function logoutCurrent() {
+  loggingOutCurrent.value = true
+  try {
+    await revokeCurrentSession()
+  } catch {
+    // 本地退出优先，服务端撤销失败时也清理当前浏览器登录态。
+  } finally {
+    authStore.logout()
+    loggingOutCurrent.value = false
+    router.push('/login')
+  }
+}
+
+onMounted(loadSessions)
+
 // ── 危险区 ──
 const deletePassword = ref('')
 const deletingAccount = ref(false)
@@ -341,8 +537,14 @@ async function doDeleteAccount() {
 .page-title { margin: 0; font-size: 22px; }
 .section { padding: 12px 4px; }
 .section-title { margin: 0 0 16px; font-size: 16px; }
+.section-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 12px; }
 .hint { color: var(--color-text-tertiary); font-size: 12px; margin: 8px 0 0; }
+.css-input { margin-top: 12px; }
+.css-input :deep(textarea) {
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+}
 
 .avatar-row { display: flex; gap: 24px; align-items: center; }
 .avatar-preview { width: 96px; height: 96px; border-radius: 50%; overflow: hidden; flex-shrink: 0; }
@@ -353,6 +555,28 @@ async function doDeleteAccount() {
   color: #fff; font-size: 36px; font-weight: 600;
 }
 .avatar-controls { display: flex; flex-direction: column; gap: 8px; }
+
+.session-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  background: var(--color-bg-surface);
+}
+.session-main { min-width: 0; }
+.session-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.session-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
 
 .danger-section { background: #fff5f5; border: 1px solid #ffd6d6; border-radius: 8px; padding: 20px; }
 .danger-title { color: #d03050; }

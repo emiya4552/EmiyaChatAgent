@@ -104,6 +104,18 @@ export interface UserUpdateRequest {
   css_theme?: string | null
 }
 
+export interface UserSession {
+  id: string
+  device_label: string
+  ip_address: string | null
+  created_at: string
+  last_seen_at: string
+  expires_at: string
+  revoked_at: string | null
+  is_current: boolean
+  status: 'active' | 'revoked' | 'expired'
+}
+
 // ─── 对话 ───
 
 export interface ChatConfig {

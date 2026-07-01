@@ -20,8 +20,14 @@ from app.services.auth_service import (
     get_user_by_id,
     register_user,
 )
+from app.services.session_service import (
+    access_token_expires_at,
+    create_user_session,
+    get_active_session,
+    touch_session,
+)
 from app.utils.exceptions import AuthException
-from app.utils.security import decode_access_token
+from app.utils.security import create_access_token, decode_access_token
 
 router = APIRouter(prefix="/api/v1/auth", tags=["认证"])
 security = HTTPBearer()
@@ -38,7 +44,8 @@ async def get_current_user(
         raise AuthException("无效的认证令牌")
 
     user_id = payload.get("sub")
-    if user_id is None:
+    session_id = payload.get("sid")
+    if user_id is None or session_id is None:
         raise AuthException("无效的认证令牌")
 
     try:
@@ -49,6 +56,13 @@ async def get_current_user(
     user = await get_user_by_id(db, user_id)
     if user is None:
         raise AuthException("用户不存在")
+
+    session = await get_active_session(db, session_id, user.id)
+    if session is None:
+        raise AuthException("登录已失效，请重新登录")
+
+    await touch_session(db, session)
+    setattr(user, "_current_session_id", session.id)
     return user
 
 
@@ -60,7 +74,10 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     """用户注册，成功后返回 JWT 令牌。"""
-    user, token = await register_user(db, body.email, body.password, body.nickname)
+    user = await register_user(db, body.email, body.password, body.nickname)
+    expires_at = access_token_expires_at()
+    session = await create_user_session(db, user.id, request, expires_at)
+    token = create_access_token(str(user.id), str(session.id))
     return TokenResponse(
         access_token=token,
         user=UserResponse.model_validate(user),
@@ -75,10 +92,12 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """用户登录，返回 JWT 令牌。"""
-    result = await authenticate_user(db, body.email, body.password)
-    if result is None:
+    user = await authenticate_user(db, body.email, body.password)
+    if user is None:
         raise AuthException("邮箱或密码错误")
-    user, token = result
+    expires_at = access_token_expires_at()
+    session = await create_user_session(db, user.id, request, expires_at)
+    token = create_access_token(str(user.id), str(session.id))
     return TokenResponse(
         access_token=token,
         user=UserResponse.model_validate(user),
