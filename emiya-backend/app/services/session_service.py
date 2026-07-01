@@ -197,3 +197,26 @@ async def revoke_other_sessions(
     if count:
         await db.commit()
     return count
+
+
+async def revoke_all_sessions(
+    db: AsyncSession,
+    user_id: UUID,
+    *,
+    commit: bool = True,
+) -> int:
+    """撤销某个用户的所有有效会话。"""
+    sessions = await list_user_sessions(db, user_id)
+    now = datetime.now(timezone.utc)
+    count = 0
+    for session in sessions:
+        expires_at = session.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if session.revoked_at is None and expires_at > now:
+            session.revoked_at = now
+            db.add(session)
+            count += 1
+    if commit and count:
+        await db.commit()
+    return count

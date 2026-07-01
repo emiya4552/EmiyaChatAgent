@@ -26,6 +26,29 @@ class UserLoginRequest(BaseModel):
     password: str = Field(..., description="密码")
 
 
+class ForgotPasswordRequest(BaseModel):
+    """找回密码请求。"""
+    email: EmailStr = Field(..., description="用户邮箱")
+
+
+class ResetPasswordRequest(BaseModel):
+    """重置密码请求。"""
+    token: str = Field(..., min_length=20, description="邮件里的重置令牌")
+    new_password: str = Field(..., min_length=6, max_length=72, description="新密码")
+
+    @field_validator("new_password")
+    @classmethod
+    def password_byte_limit(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("密码过长，请使用72字符以内的密码")
+        return v
+
+
+class MessageResponse(BaseModel):
+    """通用消息响应。"""
+    message: str
+
+
 class UserResponse(BaseModel):
     """用户信息响应。"""
     id: UUID

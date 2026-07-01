@@ -139,7 +139,7 @@
               </div>
             </n-form>
             <p class="hint">
-              提示：后续阶段会把修改密码升级为撤销所有登录设备并要求重新登录。
+              修改成功后会退出所有登录设备，并要求重新登录。
             </p>
           </div>
 
@@ -420,8 +420,10 @@ async function submitChangePassword() {
   changingPassword.value = true
   try {
     await changePassword(passwordForm.value.oldPassword, passwordForm.value.newPassword)
-    message.success('密码已修改')
+    message.success('密码已修改，请重新登录')
     passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
+    authStore.logout()
+    router.push('/login')
   } catch (err: any) {
     message.error(err.response?.data?.detail || '修改失败')
   } finally {

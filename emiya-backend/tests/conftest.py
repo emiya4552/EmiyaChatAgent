@@ -41,10 +41,13 @@ async def setup_schema():
 @pytest_asyncio.fixture(autouse=True)
 async def clean_db(setup_schema):
     """每个测试前清空所有业务表，RESTART IDENTITY + CASCADE。"""
+    from app.utils.limiter import limiter
+    limiter.reset()
     async with AsyncSessionLocal() as session:
         await session.execute(text("""
             TRUNCATE TABLE
-                emotion_records, memories, relationships, messages, user_sessions,
+                emotion_records, memories, relationships, messages,
+                password_reset_tokens, user_sessions,
                 conversations, presets, prompt_templates, regex_presets,
                 personas, users
             RESTART IDENTITY CASCADE
@@ -154,12 +157,13 @@ def mock_deepseek_interrupt_after_2(monkeypatch):
 @pytest_asyncio.fixture
 async def test_user():
     from app.models.user import User
+    from app.utils.security import hash_password
     async with AsyncSessionLocal() as session:
         user = User(
             id=uuid.uuid4(),
             email=f"test-{uuid.uuid4().hex[:8]}@test.com",
             nickname="测试用户",
-            password_hash="dummy_hash",
+            password_hash=hash_password("old-password"),
         )
         session.add(user)
         await session.commit()

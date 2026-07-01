@@ -25,6 +25,7 @@ from app.models.user_session import UserSession
 from app.schemas.auth import UserResponse, UserSessionResponse, UserUpdateRequest
 from app.services.session_service import (
     list_user_sessions,
+    revoke_all_sessions,
     revoke_current_session,
     revoke_other_sessions,
     revoke_user_session,
@@ -192,16 +193,14 @@ async def change_password(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """修改密码。需校验旧密码。
-
-    MVP 策略：旧 JWT 不强制失效（不引入黑名单）；用户可手动登出。
-    """
+    """修改密码。需校验旧密码，成功后撤销该账号所有登录会话。"""
     if not verify_password(request.old_password, current_user.password_hash):
         raise AppException("当前密码不正确", status_code=400)
     if len(request.new_password.encode("utf-8")) > 72:
         raise AppException("新密码过长（≤ 72 字节）", status_code=400)
     current_user.password_hash = hash_password(request.new_password)
     db.add(current_user)
+    await revoke_all_sessions(db, current_user.id, commit=False)
     await db.commit()
 
 
