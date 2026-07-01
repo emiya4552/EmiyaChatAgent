@@ -41,13 +41,16 @@ _BLOCK_RE = re.compile(r"<%(_|=|-)?(.*?)(_)?%>", re.DOTALL)
 # 块的语义分类
 _T_TEXT = "TEXT"
 _T_IF = "IF"
+_T_ELSE_IF = "ELSE_IF"
 _T_ELSE = "ELSE"
 _T_ENDIF = "ENDIF"
 _T_EXPR = "EXPR"
+_T_EXEC = "EXEC"
 _T_RAW = "RAW"  # 不识别的块，原样输出（含起止 `<%...%>`）
 
 
 _IF_RE = re.compile(r"^\s*if\s*\((.*)\)\s*\{\s*$", re.DOTALL)
+_ELSE_IF_RE = re.compile(r"^\s*\}\s*else\s+if\s*\((.*)\)\s*\{\s*$", re.DOTALL)
 _ELSE_RE = re.compile(r"^\s*\}\s*else\s*\{\s*$")
 _ENDIF_RE = re.compile(r"^\s*\}\s*$")
 
@@ -63,12 +66,13 @@ def _classify_block(prefix: str | None, body: str, raw: str) -> tuple[str, str]:
     # 控制流：if / } else { / }
     if _IF_RE.match(body):
         return _T_IF, _IF_RE.match(body).group(1)
+    if _ELSE_IF_RE.match(body):
+        return _T_ELSE_IF, _ELSE_IF_RE.match(body).group(1)
     if _ELSE_RE.match(body):
         return _T_ELSE, ""
     if _ENDIF_RE.match(body):
         return _T_ENDIF, ""
-    # 其他 `<% ... %>` 块（含变量赋值、循环等 v0 不支持的）
-    return _T_RAW, raw
+    return _T_EXEC, body.strip()
 
 
 def _tokenize(text: str) -> list[tuple[str, str]]:
@@ -112,6 +116,28 @@ def _translate_js_expr(expr: str) -> str:
     while i < len(expr):
         ch = expr[i]
         if in_str is None:
+            if expr.startswith("await", i) and (
+                i + 5 == len(expr) or not (expr[i + 5].isalnum() or expr[i + 5] == "_")
+            ):
+                i += 5
+                while i < len(expr) and expr[i].isspace():
+                    i += 1
+                continue
+            if expr.startswith("typeof", i) and (
+                i + 6 == len(expr) or expr[i + 6].isspace()
+            ):
+                j = i + 6
+                while j < len(expr) and expr[j].isspace():
+                    j += 1
+                k = j
+                if k < len(expr) and (expr[k].isalpha() or expr[k] in "_$"):
+                    k += 1
+                    while k < len(expr) and (expr[k].isalnum() or expr[k] in "_$"):
+                        k += 1
+                    name = expr[j:k]
+                    out.append(f"typeof({name!r})")
+                    i = k
+                    continue
             if ch in ("'", '"'):
                 in_str = ch
                 out.append(ch)
@@ -157,7 +183,9 @@ def _translate_js_expr(expr: str) -> str:
             if ch == in_str:
                 in_str = None
             i += 1
-    return "".join(out)
+    py_expr = "".join(out)
+    py_expr = re.sub(r"\{\s*defaults\s*:", '{"defaults":', py_expr)
+    return py_expr
 
 
 def _resolve_dot_path(scope: dict, path: str):
@@ -180,6 +208,12 @@ def _eval_ast(node, scope: dict):
     # 字面量 list / tuple
     if isinstance(node, (ast.List, ast.Tuple)):
         return [_eval_ast(e, scope) for e in node.elts]
+    if isinstance(node, ast.Dict):
+        return {
+            _eval_ast(k, scope): _eval_ast(v, scope)
+            for k, v in zip(node.keys, node.values)
+            if k is not None
+        }
     # 比较
     if isinstance(node, ast.Compare):
         left = _eval_ast(node.left, scope)
@@ -236,8 +270,7 @@ def _eval_ast(node, scope: dict):
     # 标识符：v0 只允许 true/false/null（已在翻译阶段转 True/False/None）以外的裸名
     # 视为字面字符串（避免一些 EJS 表达式里裸引用变量名时炸）
     if isinstance(node, ast.Name):
-        # 不暴露 Python 全局；视为未定义 → None
-        return None
+        return scope.get(node.id)
     raise EJSEvalError(f"不允许的 AST 节点: {type(node).__name__}")
 
 
@@ -280,10 +313,34 @@ def _call_builtin(name: str, args: list, scope: dict):
         if not args:
             return None
         path = str(args[0])
-        return _resolve_dot_path(scope, path)
+        value = _resolve_dot_path(scope, path)
+        if value is None and len(args) > 1 and isinstance(args[1], dict):
+            return args[1].get("defaults")
+        return value
     if name == "getglobalvar":
         # v0 没接全局桶。返回 None（与缺失统一）。
         return None
+    if name == "typeof":
+        if not args:
+            return "undefined"
+        var_name = str(args[0])
+        if var_name not in scope or scope.get(var_name) is None:
+            return "undefined"
+        value = scope.get(var_name)
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, (int, float)):
+            return "number"
+        if isinstance(value, str):
+            return "string"
+        return "object"
+    if name == "getwi":
+        if len(args) < 2:
+            return ""
+        lookup = scope.get("__wi_entries") or {}
+        if not isinstance(lookup, dict):
+            return ""
+        return lookup.get(str(args[1]), "")
     # 其他函数视为 None（避免直接报错让用户卡住）
     return None
 
@@ -303,6 +360,86 @@ def _eval_expr(expr: str, scope: dict):
     except Exception as e:
         logger.debug(f"EJS 求值失败 expr={expr!r} err={e}")
         return None
+
+
+_ASSIGN_RE = re.compile(
+    r"^\s*(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*(.*?)\s*$",
+    re.DOTALL,
+)
+_IF_ASSIGN_RE = re.compile(
+    r"^\s*if\s*\((.*?)\)\s*(?:\{\s*)?((?:var|let|const)\s+[A-Za-z_$][\w$]*\s*=.*?)(?:\s*\})?\s*$",
+    re.DOTALL,
+)
+
+
+def _split_statements(code: str) -> list[str]:
+    statements: list[str] = []
+    buf: list[str] = []
+    in_str: str | None = None
+    depth = 0
+    i = 0
+    while i < len(code):
+        ch = code[i]
+        if in_str is None:
+            if ch in ("'", '"'):
+                in_str = ch
+            elif ch in "({[":
+                depth += 1
+            elif ch in ")}]" and depth > 0:
+                depth -= 1
+            elif ch == ";" and depth == 0:
+                statement = "".join(buf).strip()
+                if statement:
+                    statements.append(statement)
+                buf = []
+                i += 1
+                continue
+        else:
+            if ch == "\\" and i + 1 < len(code):
+                buf.append(ch)
+                buf.append(code[i + 1])
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        buf.append(ch)
+        i += 1
+    statement = "".join(buf).strip()
+    if statement:
+        statements.append(statement)
+    return statements
+
+
+def _strip_line_comments(code: str) -> str:
+    lines = []
+    for line in code.splitlines():
+        cut = line.find("//")
+        lines.append(line[:cut] if cut >= 0 else line)
+    return "\n".join(lines)
+
+
+def _execute_statement(statement: str, scope: dict) -> None:
+    if_match = _IF_ASSIGN_RE.match(statement)
+    if if_match:
+        cond, inner = if_match.groups()
+        if not _truthy(_eval_expr(cond, scope)):
+            return
+        statement = inner
+
+    assign = _ASSIGN_RE.match(statement)
+    if not assign:
+        logger.debug(f"EJS 执行块暂不支持 statement={statement!r}")
+        return
+    name, expr = assign.groups()
+    scope[name] = _eval_expr(expr, scope)
+
+
+def _exec_code(code: str, scope: dict) -> None:
+    for statement in _split_statements(_strip_line_comments(code)):
+        try:
+            _execute_statement(statement, scope)
+        except Exception as e:
+            logger.debug(f"EJS 执行块失败 statement={statement!r} err={e}")
 
 
 # ─── 渲染主循环（含 if 嵌套） ──────────────────────────────────────
@@ -331,23 +468,49 @@ def _render_tokens(
             out.append("" if v is None else str(v))
             i += 1
             continue
+        if kind == _T_EXEC:
+            _exec_code(payload, scope)
+            i += 1
+            continue
         if kind == _T_IF:
             cond = payload
-            # 渲染 then 分支
-            then_str, j = _render_tokens(tokens, i + 1, scope, {_T_ELSE, _T_ENDIF})
-            else_str = ""
+            selected = _truthy(_eval_expr(cond, scope))
+            branch_str, j = _render_tokens(
+                tokens,
+                i + 1,
+                scope if selected else dict(scope),
+                {_T_ELSE_IF, _T_ELSE, _T_ENDIF},
+            )
+            if selected:
+                out.append(branch_str)
+
+            while j < n and tokens[j][0] == _T_ELSE_IF:
+                else_if_cond = tokens[j][1]
+                branch_selected = (not selected) and _truthy(_eval_expr(else_if_cond, scope))
+                branch_str, j = _render_tokens(
+                    tokens,
+                    j + 1,
+                    scope if branch_selected else dict(scope),
+                    {_T_ELSE_IF, _T_ELSE, _T_ENDIF},
+                )
+                if branch_selected:
+                    out.append(branch_str)
+                    selected = True
+
             if j < n and tokens[j][0] == _T_ELSE:
-                else_str, j = _render_tokens(tokens, j + 1, scope, {_T_ENDIF})
+                branch_selected = not selected
+                branch_str, j = _render_tokens(
+                    tokens, j + 1, scope if branch_selected else dict(scope), {_T_ENDIF}
+                )
+                if branch_selected:
+                    out.append(branch_str)
+                    selected = True
+
             if j < n and tokens[j][0] == _T_ENDIF:
                 j += 1
-            cond_val = _eval_expr(cond, scope)
-            if _truthy(cond_val):
-                out.append(then_str)
-            else:
-                out.append(else_str)
             i = j
             continue
-        if kind in (_T_ELSE, _T_ENDIF):
+        if kind in (_T_ELSE_IF, _T_ELSE, _T_ENDIF):
             # 孤立 ELSE/ENDIF（无匹配 IF）→ 跳过（不输出，避免污染 prompt）
             i += 1
             continue
@@ -379,6 +542,7 @@ class EJSEngine:
             return text or ""
         if scope is None:
             scope = {}
+        scope = dict(scope)
         tokens = _tokenize(text)
         rendered, _ = _render_tokens(tokens, 0, scope, set())
         return rendered

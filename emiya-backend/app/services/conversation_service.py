@@ -11,7 +11,18 @@ from app.models.message import Message
 from app.models.persona import Persona
 from app.models.user import User
 from app.services.macro_engine import MacroEngine
+from app.services.mvu_runtime import build_initial_state, merge_initial_state_missing_only
 from app.utils.exceptions import ForbiddenException, NotFoundException
+
+
+def _parse_uuid_list(values: list[str] | None) -> list[UUID]:
+    out: list[UUID] = []
+    for value in values or []:
+        try:
+            out.append(UUID(str(value)))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 async def get_user_conversations(
@@ -150,6 +161,25 @@ async def create_conversation(
         )
         db.add(greeting)
 
+    from app.services.worldbook.service import get_worldbooks_by_ids
+
+    worldbooks = await get_worldbooks_by_ids(db, _parse_uuid_list(seed_worldbook_ids))
+    initial_state = build_initial_state(
+        card_data=ai_persona.card_data,
+        worldbooks=worldbooks,
+    )
+    if (
+        initial_state.get("stat_data")
+        or initial_state.get("sources")
+        or ai_persona.uses_mvu
+    ):
+        merged_variables, _ = merge_initial_state_missing_only(
+            conversation.variables or {},
+            initial_state,
+        )
+        conversation.variables = merged_variables
+        db.add(conversation)
+
     await db.commit()
     await db.refresh(conversation)
 
@@ -219,6 +249,39 @@ async def get_conversation_by_id(
         )
     )
     return result.unique().scalar_one_or_none()
+
+
+async def reload_conversation_mvu_initial_state(
+    db: AsyncSession, conversation_id: UUID, user_id: UUID
+) -> Conversation | None:
+    """Fill missing MVU variables from the current card/worldbook initial state.
+
+    Existing keys are never overwritten. This is the manual "reload initial
+    state" action from ADR MVU-0002.
+    """
+    conv = await get_conversation_by_id(db, conversation_id, user_id)
+    if conv is None:
+        return None
+    if conv.persona is None:
+        raise NotFoundException("对话未绑定角色卡")
+
+    from app.services.worldbook.service import get_worldbooks_by_ids
+
+    worldbooks = await get_worldbooks_by_ids(db, _parse_uuid_list(conv.worldbook_ids))
+    initial_state = build_initial_state(
+        card_data=conv.persona.card_data,
+        worldbooks=worldbooks,
+    )
+    merged_variables, _ = merge_initial_state_missing_only(
+        conv.variables or {},
+        initial_state,
+        reloaded=True,
+    )
+    conv.variables = merged_variables
+    db.add(conv)
+    await db.commit()
+
+    return await get_conversation_by_id(db, conversation_id, user_id)
 
 
 async def apply_preset_to_conversation(

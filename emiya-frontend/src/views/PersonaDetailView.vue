@@ -49,6 +49,67 @@
           </div>
         </n-card>
 
+        <n-card v-if="mvuReport?.is_mvu_card" title="MVU 兼容性" class="detail-card mvu-card">
+          <div class="mvu-head">
+            <n-tag size="small" :type="mvuReport.level === 'partial' ? 'warning' : 'success'">
+              {{ mvuReport.level === 'partial' ? '部分兼容' : '已兼容' }}
+            </n-tag>
+            <span class="mvu-summary">
+              {{ mvuReport.supported.length }} 项已支持，{{ mvuReport.unsupported.length }} 项需降级
+            </span>
+          </div>
+
+          <n-collapse arrow-placement="right" class="mvu-collapse">
+            <n-collapse-item :title="`已兼容 (${supportedDetails.length})`" name="supported">
+              <div v-if="supportedDetails.length" class="mvu-detail-list">
+                <div v-for="item in supportedDetails" :key="item.code" class="mvu-detail supported">
+                  <div class="mvu-detail-head">
+                    <n-tag size="small" type="success">兼容</n-tag>
+                    <strong>{{ item.title }}</strong>
+                    <span v-if="item.count" class="mvu-count">{{ item.count }}</span>
+                  </div>
+                  <p class="mvu-detail-summary">{{ item.summary }}</p>
+                  <p class="mvu-detail-body">{{ item.detail }}</p>
+                  <div v-if="item.evidence?.length" class="mvu-evidence">
+                    <span v-for="e in item.evidence.slice(0, 8)" :key="`${item.code}-${e}`">{{ e }}</span>
+                  </div>
+                </div>
+              </div>
+              <p v-else class="mvu-empty">暂未检测到明确兼容项</p>
+            </n-collapse-item>
+
+            <n-collapse-item :title="`未兼容 / 降级 (${unsupportedDetails.length})`" name="unsupported">
+              <div v-if="unsupportedDetails.length" class="mvu-detail-list">
+                <div v-for="item in unsupportedDetails" :key="item.code" class="mvu-detail unsupported">
+                  <div class="mvu-detail-head">
+                    <n-tag size="small" type="warning">降级</n-tag>
+                    <strong>{{ item.title }}</strong>
+                    <span v-if="item.count" class="mvu-count">{{ item.count }}</span>
+                  </div>
+                  <p class="mvu-detail-summary">{{ item.summary }}</p>
+                  <p class="mvu-detail-body">{{ item.detail }}</p>
+                  <div v-if="item.evidence?.length" class="mvu-evidence">
+                    <span v-for="e in item.evidence.slice(0, 8)" :key="`${item.code}-${e}`">{{ e }}</span>
+                  </div>
+                </div>
+              </div>
+              <p v-else class="mvu-empty">没有发现需要降级处理的能力</p>
+            </n-collapse-item>
+
+            <n-collapse-item :title="`检测特征 (${mvuFeatureEntries.length})`" name="features">
+              <div class="mvu-feature-grid">
+                <div v-for="[key, value] in mvuFeatureEntries" :key="key" class="mvu-feature">
+                  <span class="mvu-feature-key">{{ featureLabel(key) }}</span>
+                  <span class="mvu-feature-val">{{ value }}</span>
+                </div>
+              </div>
+              <div v-if="mvuReport.warnings.length" class="mvu-warnings">
+                <p v-for="w in mvuReport.warnings.slice(0, 6)" :key="w">{{ w }}</p>
+              </div>
+            </n-collapse-item>
+          </n-collapse>
+        </n-card>
+
         <!-- 关系摘要 -->
         <n-card v-if="relationship" title="你和 TA" class="detail-card relationship-card">
           <div class="rel-main">
@@ -101,7 +162,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { NButton, NIcon, NSpin, NCard, NTag, NDivider, NProgress, NEmpty, useMessage } from 'naive-ui'
+import {
+  NButton, NIcon, NSpin, NCard, NTag, NDivider, NProgress, NEmpty,
+  NCollapse, NCollapseItem, useMessage,
+} from 'naive-ui'
 import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
 import { fetchPersonaDetail, exportPersonaUrl } from '../api/persona'
@@ -129,6 +193,32 @@ const cardMeta = computed(() => {
       || '') as string,
   }
 })
+
+const mvuReport = computed(() => persona.value?.mvu_compatibility || null)
+const mvuFeatureEntries = computed(() => {
+  const features = mvuReport.value?.features || {}
+  return Object.entries(features).filter(([, value]) => Number(value) > 0)
+})
+const mvuDetails = computed(() => mvuReport.value?.details || [])
+const supportedDetails = computed(() =>
+  mvuDetails.value.filter(item => item.status === 'supported')
+)
+const unsupportedDetails = computed(() =>
+  mvuDetails.value.filter(item => item.status === 'unsupported')
+)
+
+function featureLabel(key: string): string {
+  const labels: Record<string, string> = {
+    initvar_entries: '[initvar] 条目',
+    opening_entries: '[opening] 条目',
+    tavern_helper_scripts: '助手脚本',
+    remote_scripts: '远程脚本',
+    regex_scripts: '正则脚本',
+    html_fragments: 'HTML 片段',
+    schema_defaults: 'Schema 默认值',
+  }
+  return labels[key] || key
+}
 
 const milestoneLabels: Record<string, string> = {
   first_deep_talk: '第一次深度对话',
@@ -191,6 +281,96 @@ function onExport() {
 .alt-tag { color: #aaa; font-size: 12px; margin-right: 4px; }
 
 .card-meta-card { background: var(--color-bg-surface-elevated, #fafafa); }
+.mvu-card { background: var(--color-bg-surface-elevated, #fafafa); }
+.mvu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.mvu-summary { font-size: 13px; color: var(--color-text-secondary); }
+.mvu-collapse { margin-top: 4px; }
+.mvu-detail-list { display: flex; flex-direction: column; gap: 10px; }
+.mvu-detail {
+  border: 1px solid var(--color-border, #eee);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--color-bg-surface, #fff);
+}
+.mvu-detail.supported { border-left: 3px solid #18a058; }
+.mvu-detail.unsupported { border-left: 3px solid #f0a020; }
+.mvu-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.mvu-count {
+  margin-left: auto;
+  min-width: 22px;
+  text-align: right;
+  color: var(--color-text-tertiary);
+  font-weight: 600;
+}
+.mvu-detail-summary {
+  margin: 8px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.mvu-detail-body {
+  margin: 6px 0 0;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.mvu-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.mvu-evidence span {
+  max-width: 100%;
+  border: 1px solid var(--color-border, #eee);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-page, #f7f7f7);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mvu-empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+.mvu-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.mvu-feature {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border, #eee);
+  border-radius: 6px;
+  background: var(--color-bg-surface, #fff);
+  font-size: 12px;
+}
+.mvu-feature-key { color: var(--color-text-tertiary); }
+.mvu-feature-val { font-weight: 600; color: var(--color-text-secondary); }
+.mvu-warnings {
+  margin-top: 10px;
+  color: #d03050;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.mvu-warnings p { margin: 4px 0; }
 .meta-row {
   display: flex;
   align-items: baseline;

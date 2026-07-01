@@ -17,6 +17,7 @@ from app.schemas.persona import (
     PersonaUpdateRequest,
 )
 from app.services import persona_service
+from app.services.mvu_runtime import analyze_card_compatibility
 from app.utils.exceptions import AppException, ForbiddenException, NotFoundException
 from app.utils.security import decode_access_token
 
@@ -84,6 +85,36 @@ def _to_list_items(personas: list[Persona], is_owner: bool) -> list[PersonaListI
     ]
 
 
+def _parse_uuid_list(values: list[str] | None):
+    from uuid import UUID
+
+    out: list[UUID] = []
+    for value in values or []:
+        try:
+            out.append(UUID(str(value)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+async def _persona_response_with_mvu(
+    db: AsyncSession,
+    persona: Persona,
+) -> PersonaResponse:
+    from app.services.worldbook.service import get_worldbooks_by_ids
+
+    worldbooks = await get_worldbooks_by_ids(
+        db, _parse_uuid_list(persona.default_worldbook_ids),
+    )
+    report = analyze_card_compatibility(
+        persona.card_data,
+        worldbooks=worldbooks,
+    )
+    return PersonaResponse.model_validate(persona).model_copy(
+        update={"mvu_compatibility": report},
+    )
+
+
 @router.post("", response_model=PersonaResponse, status_code=status.HTTP_201_CREATED)
 async def create_persona(
     request: PersonaCreateRequest,
@@ -94,7 +125,7 @@ async def create_persona(
     try:
         data = request.model_dump(exclude_unset=True)
         persona = await persona_service.create_persona(db, current_user.id, data)
-        return PersonaResponse.model_validate(persona)
+        return await _persona_response_with_mvu(db, persona)
     except ValueError as e:
         raise AppException(str(e), status_code=400)
 
@@ -113,7 +144,7 @@ async def get_persona_detail(
         raise NotFoundException("角色卡不存在")
     if persona.user_id is not None and persona.user_id != current_user.id:
         raise NotFoundException("角色卡不存在")
-    return PersonaResponse.model_validate(persona)
+    return await _persona_response_with_mvu(db, persona)
 
 
 @router.put("/{persona_id}", response_model=PersonaResponse)
@@ -133,7 +164,7 @@ async def update_persona(
             current_user.id,
             request.model_dump(exclude_unset=True),
         )
-        return PersonaResponse.model_validate(persona)
+        return await _persona_response_with_mvu(db, persona)
     except ValueError as e:
         msg = str(e)
         if "不存在" in msg:
@@ -326,6 +357,7 @@ async def import_parse(
         "duplicate_check": dup,
         "avatar_preview": avatar_preview,
         "cache_key": cache_key if cached else None,
+        "mvu_compatibility": analyze_card_compatibility(raw_card),
     }
 
 
@@ -493,7 +525,7 @@ async def import_confirm(
             logger.exception("内嵌 regex_scripts 抽取失败，persona 已建但正则预设未挂载")
 
     return {
-        "persona": PersonaResponse.model_validate(persona),
+        "persona": await _persona_response_with_mvu(db, persona),
         "avatar_saved": bool(preview.get("avatar_url")),
         "worldbook_attached": worldbook_attached,
         "regex_preset_attached": regex_preset_attached,

@@ -118,8 +118,19 @@
               <li>展开世界书 / 角色卡中的 <code>&lt;%_ if %&gt;</code> 条件块（基于当前变量求值）</li>
             </ul>
             <p class="mvu-banner-note">
-              当前 v0 暂不支持楼层快照 / 回滚 / Zod schema 校验（计划 v1）。详见 ADR-0010。
+              导入后可在角色详情查看完整 MVU 兼容性报告。
             </p>
+            <div v-if="parseResult.mvu_compatibility" class="mvu-compat">
+              <n-tag size="small" :type="parseResult.mvu_compatibility.level === 'partial' ? 'warning' : 'success'">
+                {{ parseResult.mvu_compatibility.level === 'partial' ? '部分兼容' : '已兼容' }}
+              </n-tag>
+              <span class="mvu-compat-text">
+                {{ parseResult.mvu_compatibility.supported.length }} 项已支持，{{ parseResult.mvu_compatibility.unsupported.length }} 项需降级
+              </span>
+              <p v-for="w in parseResult.mvu_compatibility.warnings.slice(0, 2)" :key="w" class="mvu-banner-note">
+                {{ w }}
+              </p>
+            </div>
           </n-alert>
           <n-divider />
           <n-form label-placement="top" size="small">
@@ -318,5 +329,7 @@ async function onConfirmImport() {
 .mvu-banner-list { margin: 8px 0; padding-left: 24px; line-height: 1.7; font-size: 13px; }
 .mvu-banner-list code { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 .mvu-banner-note { margin: 6px 0 0; font-size: 12px; color: var(--color-text-tertiary); }
+.mvu-compat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.mvu-compat-text { font-size: 12px; color: var(--color-text-secondary); }
 .parse-error { margin-top: 12px; }
 </style>

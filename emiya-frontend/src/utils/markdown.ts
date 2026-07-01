@@ -16,6 +16,17 @@ function _isFrontendHtml(text: string): boolean {
   return text.includes('html>') || text.includes('<head>') || text.includes('<body')
 }
 
+function _isHtmlFragment(text: string, lang?: string): boolean {
+  const normalizedLang = (lang || '').trim().toLowerCase()
+  if (normalizedLang && normalizedLang !== 'html' && normalizedLang !== 'xml') {
+    return false
+  }
+
+  const trimmed = text.trim()
+  if (!trimmed.startsWith('<')) return false
+  return /^<\/?[a-z][\w:-]*(?:\s|>|\/>)/i.test(trimmed)
+}
+
 function _utf8ToBase64(s: string): string {
   // 兼容中文：先转 UTF-8 percent encoding，再 base64
   return btoa(unescape(encodeURIComponent(s)))
@@ -29,6 +40,12 @@ renderer.code = function (token: any) {
   if (_isFrontendHtml(text)) {
     const b64 = _utf8ToBase64(text)
     return `<div class="th-html-render" data-content="${b64}"></div>`
+  }
+  // Some ST/MVU regex scripts wrap HTML fragments in plain fenced blocks:
+  // ```\n<summary ...>...</summary>\n```
+  // These are intended as sanitized in-message HTML, not developer code.
+  if (_isHtmlFragment(text, lang)) {
+    return text
   }
   return _defaultCodeRenderer(token)
 }

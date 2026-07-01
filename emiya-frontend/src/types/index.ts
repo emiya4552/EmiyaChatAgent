@@ -11,6 +11,35 @@ export interface PersonaListItem {
   source: string
 }
 
+export interface MvuCompatibilityReport {
+  is_mvu_card: boolean
+  level: 'none' | 'supported' | 'partial'
+  features: Record<string, number>
+  supported: string[]
+  unsupported: string[]
+  details?: Array<{
+    code: string
+    status: 'supported' | 'unsupported' | 'warning'
+    title: string
+    summary: string
+    detail: string
+    count: number
+    evidence: string[]
+  }>
+  warnings: string[]
+}
+
+export interface MvuConversationState {
+  initialized: boolean
+  stat_data_keys: string[]
+  field_count: number
+  initialized_at: string | null
+  last_reload_at: string | null
+  seeded_keys: string[]
+  source_count: number
+  warnings: string[]
+}
+
 export interface PersonaDetail {
   id: string
   user_id: string | null
@@ -37,6 +66,7 @@ export interface PersonaDetail {
   css_theme: string | null
   // MVU 兼容标记（导入时自动判定，详见 docs/adr/0010）
   uses_mvu: boolean
+  mvu_compatibility: MvuCompatibilityReport | null
   created_at: string
   updated_at: string | null
 }
@@ -81,6 +111,7 @@ export interface ImportParseResult {
     similar_persona: { id: string; name: string } | null
   }
   avatar_preview: string | null
+  mvu_compatibility?: MvuCompatibilityReport | null
   // 大卡 raw_card 在后端 Redis 缓存的 key（TTL 10 min）
   // confirm 时通过 preview.card_data._cache_key 透传给后端取回完整数据
   cache_key: string | null
@@ -160,6 +191,7 @@ export interface Conversation {
   reply_length_enabled: boolean
   // MVU 对话级变量桶（详见 ADR-0007）；只读暴露给前端展示
   variables: Record<string, unknown>
+  mvu_state: MvuConversationState | null
   created_at: string
   updated_at: string
 }

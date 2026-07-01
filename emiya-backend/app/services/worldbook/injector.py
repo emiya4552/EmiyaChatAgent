@@ -76,9 +76,11 @@ class WorldbookInjector:
             return WorldbookInjector._strip_anchors(messages)
 
         # EJS 先跑（MVU 兼容，详见 ADR-0010），再跑 MacroEngine
-        ejs_scope = (scope or {}).get("local") or {}
         rendered_entries: list[ActiveEntry] = []
         for ae in activated:
+            ejs_scope = dict((scope or {}).get("local") or {})
+            if ae.entry_lookup:
+                ejs_scope["__wi_entries"] = ae.entry_lookup
             c = EJSEngine.render(ae.content, ejs_scope)
             c = MacroEngine.render(c, scope)
             rendered_entries.append(
@@ -92,6 +94,7 @@ class WorldbookInjector:
                     role=ae.role,
                     outlet_name=ae.outlet_name,
                     content=c,
+                    entry_lookup=ae.entry_lookup,
                 )
             )
         activated = rendered_entries
