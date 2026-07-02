@@ -9,6 +9,8 @@ export const useChatStore = defineStore('chat', () => {
   const isStreaming = ref(false)
   const streamingContent = ref('')
   const error = ref<string | null>(null)
+  // MVU 诊断运行时视图（ADR-0003 §3）：每轮 message_done 派生，仅当前对话
+  const mvuRuntimeView = ref<import('../types').MvuRuntimeView | null>(null)
   const hasMoreMessages = ref(false)
 
   let abortController: AbortController | null = null
@@ -19,6 +21,8 @@ export const useChatStore = defineStore('chat', () => {
 
   async function fetchMessages(conversationId: string) {
     _currentPage = 0
+    // 切换对话：清掉上一对话的 MVU 诊断视图（它只随 message_done 派生，无法从历史反推）
+    mvuRuntimeView.value = null
     const msgs = await chatApi.fetchMessages(conversationId, _pageSize, 0)
     // 后端按时间倒序，前端需要正序展示
     messages.value = msgs.reverse()
@@ -75,14 +79,21 @@ export const useChatStore = defineStore('chat', () => {
         isStreaming.value = false
         streamingContent.value = ''
         abortController = null
-        // 用后端返回的真 Message.id 替换 aiTempId；同时用 final_content 覆盖流式累积版
-        // （ADR-0015：node_post_process 跑 reply 正则 + UpdateVariable 解析后落库的才是最终版）
+        // 用后端返回的真 Message.id 替换 aiTempId；用 final_content 覆盖流式累积版
+        // （content=prompt 真相版）；final_display_content 是显示版（ADR-0003 双管线），
+        // MessageBubble 优先渲染它，实现流式期间未清洗版 → message_done 后美化版的静默替换。
         const aiMsg = messages.value.find((m) => m.id === aiTempId)
         if (aiMsg) {
           if (data?.message_id) aiMsg.id = data.message_id
           if (typeof data?.final_content === 'string' && data.final_content.length > 0) {
             aiMsg.content = data.final_content
           }
+          if (typeof data?.final_display_content === 'string') {
+            aiMsg.display_content = data.final_display_content
+          }
+        }
+        if (data?.mvu_runtime_view) {
+          mvuRuntimeView.value = data.mvu_runtime_view as import('../types').MvuRuntimeView
         }
         if (data?.new_memories) {
           convStore.setNewMemoriesCount(data.new_memories)
@@ -182,7 +193,8 @@ export const useChatStore = defineStore('chat', () => {
         if (abortController) return
         isStreaming.value = false
         streamingContent.value = ''
-        // 用真 id 替换 liveAiMsgId 消息；用 final_content 覆盖累积版（ADR-0015）
+        // 用真 id 替换 liveAiMsgId 消息；final_content=prompt 真相版，
+        // final_display_content=显示版（ADR-0003 双管线，MessageBubble 优先渲染）
         if (liveAiMsgId) {
           const aiMsg = messages.value.find((m) => m.id === liveAiMsgId)
           if (aiMsg) {
@@ -190,7 +202,13 @@ export const useChatStore = defineStore('chat', () => {
             if (typeof data?.final_content === 'string' && data.final_content.length > 0) {
               aiMsg.content = data.final_content
             }
+            if (typeof data?.final_display_content === 'string') {
+              aiMsg.display_content = data.final_display_content
+            }
           }
+        }
+        if (data?.mvu_runtime_view) {
+          mvuRuntimeView.value = data.mvu_runtime_view as import('../types').MvuRuntimeView
         }
         liveAiMsgId = null
       },
@@ -223,6 +241,7 @@ export const useChatStore = defineStore('chat', () => {
     isStreaming,
     streamingContent,
     error,
+    mvuRuntimeView,
     hasMoreMessages,
     fetchMessages,
     loadEarlierMessages,

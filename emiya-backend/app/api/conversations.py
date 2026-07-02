@@ -310,9 +310,10 @@ async def switch_regex_preset(
 
 
 class GreetingSwitchResponse(BaseModel):
-    """切换开场白的轻量响应：只回新 Message 的 id + content。"""
+    """切换开场白的轻量响应：回新 Message 的 id + content（prompt 版）+ 显示版。"""
     message_id: UUID
     content: str
+    display_content: str | None = None
 
 
 @router.put("/{conversation_id}/greeting", response_model=GreetingSwitchResponse)
@@ -386,7 +387,7 @@ async def switch_greeting(
             "char": persona.name,
         },
     }
-    processed_text, updated_scope = await process_assistant_message_text(
+    processed_text, display_text, updated_scope = await process_assistant_message_text(
         new_text,
         db=db,
         conv=conv,
@@ -397,6 +398,7 @@ async def switch_greeting(
 
     # 写回 Message + conv.variables（如果 UpdateVariable 解析出新 stat_data）
     msgs[0].content = processed_text
+    msgs[0].display_content = display_text
     db.add(msgs[0])
     if updated_scope is not None:
         local_after = updated_scope.get("local") or {}
@@ -409,6 +411,7 @@ async def switch_greeting(
     return GreetingSwitchResponse(
         message_id=msgs[0].id,
         content=msgs[0].content,
+        display_content=msgs[0].display_content,
     )
 
 

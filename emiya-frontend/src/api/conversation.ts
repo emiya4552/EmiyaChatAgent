@@ -68,7 +68,7 @@ export async function fetchRegexScripts(convId: string): Promise<RegexScript[]> 
 export async function switchGreeting(
   convId: string,
   greetingIndex: number,
-): Promise<{ message_id: string; content: string }> {
+): Promise<{ message_id: string; content: string; display_content?: string | null }> {
   const res = await api.put(`/v1/conversations/${convId}/greeting`, {
     greeting_index: greetingIndex,
   })

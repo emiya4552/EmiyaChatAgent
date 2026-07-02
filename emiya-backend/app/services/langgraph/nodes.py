@@ -212,10 +212,20 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             )
             history = [{"role": m.role, "content": m.content} for m in msgs_result.scalars().all()]
 
+        # MVU 变量驱动扫描（ADR-0004，默认关闭）：白名单非空时把选定 stat_data 路径
+        # 渲染成扫描文本，让当前变量驱动关键词激活。空 = 不做任何额外扫描。
+        chat_cfg = conv.chat_config or {}
+        scan_paths = chat_cfg.get("mvu_scan_variable_paths") or settings.MVU_SCAN_VARIABLE_PATHS
+        extra_scan_text, mvu_scan_items = "", []
+        if scan_paths:
+            from app.services.mvu_runtime import build_mvu_scan_text
+            extra_scan_text, mvu_scan_items = build_mvu_scan_text(conv.variables or {}, scan_paths)
+
         activated = scan_worldbook(
             worldbooks=book_dicts,
             history_messages=history,
-            chat_config=conv.chat_config or {},
+            chat_config=chat_cfg,
+            extra_scan_text=extra_scan_text,
         )
 
         # 序列化成可放入 state 的 dict
@@ -234,10 +244,10 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             }
             for ae in activated
         ]
-        return {"wi_activated": wi_activated}
+        return {"wi_activated": wi_activated, "mvu_scan_items": mvu_scan_items}
     except Exception:
         logger.exception("世界书扫描失败，本轮不注入")
-        return {"wi_activated": []}
+        return {"wi_activated": [], "mvu_scan_items": []}
 
 
 async def _load_user_persona(state: ChatState) -> Persona | None:
@@ -781,6 +791,16 @@ _TAG_STRIP_RE = _re.compile(r"<[^>]+>")
 _TEMPLATE_DOUBLE_BRACE = _re.compile(r"\{\{[^{}\n]{1,100}\}\}")
 _TEMPLATE_SINGLE_BRACE = _re.compile(r"\{[^{}\n]{1,100}\}")
 
+# MVU 协议/指令族标签（comment 子串，大小写不敏感，对齐 MVU 的 includes 语义）。
+# 这些条目是"教 LLM 输出 <UpdateVariable> 的指令"或"状态读数"，**不是**要 LLM 回填
+# 追加的 HTML 显示模板——绝不能被尾部模板兜底/续写当成输出模板，否则会注入错误约束
+# 文案并每轮空烧一次 prefix 续写。详见 docs/mvu/adr/0003（标签拦截）。
+_MVU_TAG_RE = _re.compile(r"\[(?:mvu_update|mvu_plot|mvu_status|initvar|opening)\]", _re.I)
+
+
+def _is_mvu_tagged_entry(entry: dict) -> bool:
+    return bool(_MVU_TAG_RE.search(str(entry.get("comment") or "")))
+
 
 def _extract_template_entries(wi_activated: list[dict]) -> list[dict]:
     """识别"输出模板"型条目，返回每个的 {marker, content, order}。
@@ -794,6 +814,12 @@ def _extract_template_entries(wi_activated: list[dict]) -> list[dict]:
     for entry in wi_activated:
         content = entry.get("content", "")
         if not content:
+            continue
+
+        # MVU 指令/状态族条目（[mvu_update]/[mvu_status]/[mvu_plot]/[initvar]/[opening]）
+        # 不是输出模板：它们的 <UpdateVariable>/<Analysis>/<status_...> 等标签会误命中
+        # has_custom_tag。跳过，避免尾部模板兜底注入错误约束 + 空烧续写（ADR-0003 拦截）。
+        if _is_mvu_tagged_entry(entry):
             continue
 
         has_details = bool(_DETAILS_RE.search(content))
@@ -1003,10 +1029,11 @@ async def node_post_process(state: ChatState) -> dict:
         # MacroEngine 对 LLM 实时输出意义不大（LLM 不会自己写 {{user}} 宏），
         # 但 reply 正则 + UpdateVariable 解析必跑。
         processed_reply = state.get("assistant_reply") or ""
+        display_reply = processed_reply
         scope_before = state.get("mvu_scope")
         if processed_reply and conv_for_pipeline is not None:
             from app.services.message_pipeline import process_assistant_message_text
-            processed_reply, scope_after = await process_assistant_message_text(
+            processed_reply, display_reply, scope_after = await process_assistant_message_text(
                 processed_reply,
                 db=db,
                 conv=conv_for_pipeline,
@@ -1014,8 +1041,10 @@ async def node_post_process(state: ChatState) -> dict:
                 macro_scope=None,
                 run_macro=False,
             )
-            # 写回 state，让下游（chat_service 的 message_done.final_content）能拿到
+            # 写回 state：assistant_reply=prompt 真相版，assistant_display=显示版
+            # （chat_service 的 message_done 分别透出 final_content / final_display_content）
             state["assistant_reply"] = processed_reply
+            state["assistant_display"] = display_reply
             if scope_after is not None:
                 state["mvu_scope"] = scope_after
 
@@ -1025,6 +1054,7 @@ async def node_post_process(state: ChatState) -> dict:
             assistant_msg = Message(
                 id=msg_id,
                 conversation_id=conv_id, role="assistant", content=processed_reply,
+                display_content=display_reply,
             )
             db.add(assistant_msg)
             # 显式赋 id（SQLAlchemy 的 column default 在 flush 时才执行）

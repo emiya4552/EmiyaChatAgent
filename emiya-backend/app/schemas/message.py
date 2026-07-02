@@ -12,6 +12,8 @@ class MessageResponse(BaseModel):
     conversation_id: UUID
     role: str
     content: str
+    # 显示版（ADR-0003 双管线）；NULL 时前端回退 content
+    display_content: str | None = None
     created_at: datetime
 
     class Config:

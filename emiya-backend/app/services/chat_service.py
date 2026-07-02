@@ -273,9 +273,15 @@ async def process_chat(
         "conversation_id": str(conversation_id),
         "new_memories": new_count,
         # ADR-0015：node_post_process 已经把 reply 正则 + UpdateVariable 解析过的
-        # 文本写回 final_state["assistant_reply"]，这里透传给前端覆盖累积版。
-        # 若流式期间用户已看到未清洗版，message_done 时 UI 静默替换为最终版。
+        # 文本写回 final_state["assistant_reply"]（prompt 真相版），这里透传给前端
+        # 覆盖累积版。final_display_content 是 markdownOnly 美化后的显示版（ADR-0003
+        # 双管线）——前端优先渲染它，流式期间看到的未清洗版在 message_done 时静默替换。
         "final_content": final_state.get("assistant_reply") or "",
+        "final_display_content": (
+            final_state.get("assistant_display")
+            or final_state.get("assistant_reply")
+            or ""
+        ),
     }
     if affinity_score is not None:
         msg_done_data["affinity_score"] = affinity_score
@@ -283,6 +289,12 @@ async def process_chat(
     # （MVU 写回后 conv.variables 已更新，不传则前端要等手动 refetch 才看到）
     mvu_scope = final_state.get("mvu_scope") or {}
     msg_done_data["variables"] = dict(mvu_scope.get("local") or {})
+    # MVU 诊断运行时视图（ADR-0003 §3）：按需派生、不持久化、不进列表
+    from app.services.mvu_runtime import build_runtime_view
+    msg_done_data["mvu_runtime_view"] = build_runtime_view(
+        final_state.get("wi_activated"),
+        scan_items=final_state.get("mvu_scan_items"),
+    )
     yield f"event: message_done\ndata: {json.dumps(msg_done_data, ensure_ascii=False)}\n\n"
     await _broadcast(conversation_id, "message_done", msg_done_data)
 

@@ -243,3 +243,173 @@ def test_mvu_diagnostics_detail_lists_initialization_sources():
     assert detail_by_code["initvar_worldbook_seed"]["evidence"] == ["[initvar] base stats"]
     assert detail_by_code["opening_worldbook_seed"]["count"] == 1
     assert detail_by_code["opening_worldbook_seed"]["status"] == "supported"
+
+
+# ─── ADR-0003 双管线：prompt 真相版 vs 显示版 ───
+
+from app.services.regex_processor import RegexProcessor  # noqa: E402
+
+
+def _mk_script(name, find, repl, *, prompt_only=False, markdown_only=False):
+    return {
+        "scriptName": name,
+        "findRegex": find,
+        "replaceString": repl,
+        "placement": [2],  # AI_OUTPUT
+        "promptOnly": prompt_only,
+        "markdownOnly": markdown_only,
+        "disabled": False,
+    }
+
+
+def test_two_pipeline_split_by_script_flags():
+    """content=neither（promptOnly 留给 build）；display=not promptOnly（含美化）。"""
+    text = "u<U>x</U> b<B>y</B> n<N>z</N>"
+    strip = _mk_script(
+        "strip-promptonly", r"/<U>[\s\S]*?<\/U>/", "", prompt_only=True,
+    )
+    beautify = _mk_script(
+        "fold-markdownonly", r"/<B>[\s\S]*?<\/B>/", "[B]", markdown_only=True,
+    )
+    both = _mk_script("both-sides", r"/<N>[\s\S]*?<\/N>/", "[N]")  # neither flag
+    scripts = [strip, beautify, both]
+
+    # 与 message_pipeline.process_assistant_message_text 的划分保持一致
+    prompt_scripts = [
+        s for s in scripts
+        if not s.get("markdownOnly", False) and not s.get("promptOnly", False)
+    ]
+    display_scripts = [s for s in scripts if not s.get("promptOnly", False)]
+
+    content = RegexProcessor.apply_reply_to_text(text, prompt_scripts)
+    display = RegexProcessor.apply_reply_to_text(text, display_scripts)
+
+    # content(prompt 真相版)：只烘 neither；promptOnly 的 <U> 原样保留（交给 build
+    # 阶段 apply_prompt_only 按 depth 处理），markdownOnly 的 <B> 不进来
+    assert content == "u<U>x</U> b<B>y</B> n[N]"
+    # display(显示版)：markdownOnly + neither 都生效；promptOnly 的 <U> 保留
+    assert display == "u<U>x</U> b[B] n[N]"
+
+
+def test_apply_reply_to_text_now_applies_passed_promptonly_scripts():
+    """回归护栏：apply_reply_to_text 不再内部过滤 promptOnly，忠实应用传入集合。"""
+    text = "keep <opt>menu</opt> tail"
+    prompt_only = _mk_script(
+        "hide-options", r"/<opt>[\s\S]*?<\/opt>/", "", prompt_only=True
+    )
+
+    out = RegexProcessor.apply_reply_to_text(text, [prompt_only])
+
+    assert out == "keep  tail"
+
+
+# ─── ADR-0003 拦截：MVU 指令条目不被尾部模板兜底误当输出模板 ───
+
+from app.services.langgraph.nodes import (  # noqa: E402
+    _detect_output_templates,
+    _extract_template_entries,
+)
+
+
+def test_tail_template_skips_mvu_tagged_entries():
+    wi = [
+        {  # [mvu_update]：含 <UpdateVariable>/<Analysis>/<JSONPatch> 自定义标签，
+           # 旧逻辑会误命中 has_custom_tag → 被当成输出模板
+            "comment": "[mvu_update]变量输出格式",
+            "content": "<UpdateVariable><Analysis>x</Analysis>"
+                       "<JSONPatch>[]</JSONPatch></UpdateVariable>",
+            "order": 10,
+        },
+        {  # [mvu_status]：状态读数，不是 LLM 要回填的模板
+            "comment": "[mvu_status]变量列表",
+            "content": "<status_current_variables>a: 1</status_current_variables>",
+            "order": 20,
+        },
+        {  # 真正的输出模板（非 MVU 标签）应保留
+            "comment": "状态栏模板",
+            "content": "<details><summary>【状态栏】</summary>"
+                       "<StatusBlock>{名字}</StatusBlock></details>",
+            "order": 30,
+        },
+    ]
+
+    entries = _extract_template_entries(wi)
+    markers = _detect_output_templates(wi)
+
+    # 只保留真正的输出模板；两条 MVU 指令/状态条目被排除
+    assert [e["comment"] if "comment" in e else e["marker"] for e in entries]  # not empty
+    assert markers == ["【状态栏】"]
+
+
+# ─── ADR-0003 §3：MVU 诊断运行时视图 ───
+
+from app.services.mvu_runtime import build_runtime_view  # noqa: E402
+
+
+def test_build_runtime_view_classifies_activated_mvu_entries():
+    wi = [
+        {"comment": "[mvu_update]变量输出格式", "content": "x" * 10,
+         "worldbook_id": "1", "worldbook_name": "b"},
+        {"comment": "[mvu_status]变量列表", "content": "y" * 20,
+         "worldbook_id": "1", "worldbook_name": "b"},
+        {"comment": "03_角色扮演注意[mvu_plot]", "content": "z" * 30,
+         "worldbook_id": "1", "worldbook_name": "b"},
+        {"comment": "普通剧情条目", "content": "n",
+         "worldbook_id": "1", "worldbook_name": "b"},
+    ]
+
+    view = build_runtime_view(wi)
+
+    assert view["is_mvu"] is True
+    assert view["counts"] == {"update": 1, "status": 1, "plot": 1}
+    assert [e["role"] for e in view["entries"]] == ["update", "status", "plot"]
+    assert all(e["injected_as_prompt"] is True for e in view["entries"])
+    assert any("尾部模板" in d for d in view["diagnostics"])
+
+
+def test_build_runtime_view_empty_for_non_mvu():
+    assert build_runtime_view([{"comment": "普通", "content": "x"}])["is_mvu"] is False
+    assert build_runtime_view(None)["is_mvu"] is False
+
+
+# ─── ADR-0004：变量驱动扫描（默认关闭 / 白名单） ───
+
+from app.services.mvu_runtime import build_mvu_scan_text  # noqa: E402
+from app.services.worldbook.scanner import scan_worldbook  # noqa: E402
+
+
+def test_build_mvu_scan_text_extracts_whitelisted_paths():
+    variables = {"stat_data": {"伶伶": {"当前情绪": "发情"}, "世界": {"当前地点": "书店"}}}
+
+    text, items = build_mvu_scan_text(variables, ["伶伶.当前情绪", "stat_data.世界.当前地点", "缺失.路径"])
+
+    assert "发情" in text and "书店" in text
+    by_path = {i["path"]: i for i in items}
+    assert by_path["伶伶.当前情绪"]["found"] is True
+    assert by_path["缺失.路径"]["found"] is False
+
+
+def test_build_mvu_scan_text_empty_paths_is_noop():
+    assert build_mvu_scan_text({"stat_data": {"a": 1}}, []) == ("", [])
+    assert build_mvu_scan_text({"stat_data": {"a": 1}}, None) == ("", [])
+
+
+def _book(entry):
+    return {"id": "1", "name": "b", "entries": [entry]}
+
+
+def test_scan_worldbook_variable_driven_activation_via_extra_scan_text():
+    # 一条 selective 条目，关键词"发情"；历史里没有该词，仅靠变量扫描文本激活
+    entry = {
+        "uid": 1, "comment": "发情反应", "content": "伶伶进入发情状态的描写",
+        "constant": False, "selective": True, "key": ["发情"], "enabled": True,
+    }
+    history = [{"role": "user", "content": "哦？"}]
+
+    # 无 extra_scan_text：不激活
+    assert scan_worldbook([_book(entry)], history, {}) == []
+
+    # 有 extra_scan_text（变量渲染出"当前情绪: 发情"）：激活
+    activated = scan_worldbook([_book(entry)], history, {}, extra_scan_text="伶伶.当前情绪: 发情")
+    assert len(activated) == 1
+    assert activated[0].entry["uid"] == 1

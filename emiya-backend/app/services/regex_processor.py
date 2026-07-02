@@ -411,19 +411,22 @@ class RegexProcessor:
         *,
         macro_scope: dict | None = None,
     ) -> str:
-        """对单条 assistant 文本跑所有 promptOnly=false 的脚本（reply 阶段）。
+        """对单条 assistant 文本跑传入的 AI_OUTPUT 阶段脚本（reply 阶段）。
 
         与 apply_prompt_only 不同：输入是单串，对应 ST placement=2 (AI_OUTPUT)
         语义，由 message_pipeline 在 assistant 文本"持久化前"调用。
 
-        depth / placement 限制此处不生效——单串没有"楼层"概念；脚本作者用
-        promptOnly=false 已经表态"这是对单条 reply 跑的"。
+        ⚠️ 视图过滤（promptOnly / markdownOnly）由调用方完成：message_pipeline 会
+        分别传入"prompt 真相版"（not markdownOnly）与"显示版"（not promptOnly）两个
+        子集（详见 docs/mvu/adr/0003 双管线）。这里只剔除 disabled，忠实应用传入集合。
+
+        depth / placement 限制此处不生效——单串没有"楼层"概念。
         """
         if not text:
             return text
         applicable = [
             s for s in scripts
-            if not s.get("disabled", False) and not s.get("promptOnly", False)
+            if not s.get("disabled", False)
         ]
         if not applicable:
             return text

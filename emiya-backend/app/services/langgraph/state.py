@@ -32,6 +32,8 @@ class ChatState(TypedDict):
     # 世界书激活集（由 node_activate_worldbook 产出）
     # 每元素是 dataclass ActiveEntry 的 dict 化（uid/comment/content/position/depth/role/outlet_name/worldbook_id/worldbook_name）
     wi_activated: list[dict]
+    # MVU 变量驱动扫描（ADR-0004，默认关闭）参与匹配的路径诊断 [{path,found,value_preview}]
+    mvu_scan_items: list[dict]
 
     # 用户画像
     profile: dict | None
@@ -62,7 +64,8 @@ class ChatState(TypedDict):
     enabled_blocks: set[str]
 
     # 输出
-    assistant_reply: str
+    assistant_reply: str          # prompt 真相版（进 history）
+    assistant_display: str        # 显示版（markdownOnly 美化后，前端渲染；ADR-0003 双管线）
     new_memories_count: int
     is_first_round: bool
 
