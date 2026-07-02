@@ -17,6 +17,12 @@ from app.services.mvu_runtime.runtime_view import (
     classify_mvu_comment,
 )
 from app.services.mvu_runtime.scan import build_mvu_scan_text
+from app.services.mvu_runtime.constraints import extract_constraints_from_entries
+from app.services.mvu_runtime.update_core import (
+    merge_diag,
+    validate_initvar_state,
+    validate_ops,
+)
 
 __all__ = [
     "MVU_META_KEY",
@@ -26,5 +32,9 @@ __all__ = [
     "build_runtime_view",
     "classify_mvu_comment",
     "describe_conversation_mvu_state",
+    "extract_constraints_from_entries",
+    "merge_diag",
     "merge_initial_state_missing_only",
+    "validate_initvar_state",
+    "validate_ops",
 ]

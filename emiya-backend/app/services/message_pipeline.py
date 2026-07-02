@@ -169,7 +169,19 @@ def _remove_path(root, path: list[str]):
     return None
 
 
-def _apply_json_patch_ops(stat_data: dict, ops: list[dict]) -> None:
+def _apply_json_patch_ops(
+    stat_data: dict,
+    ops: list[dict],
+    constraints: dict | None = None,
+    diag: dict | None = None,
+) -> None:
+    # ADR-0005：先过有界校验层（_ 只读保护 / 类型强转 / range clamp / enum），
+    # 只应用 accepted 的 op；诊断累加到 diag（供 mvu_runtime_view）。
+    from app.services.mvu_runtime.update_core import merge_diag, validate_ops
+    ops, op_diag = validate_ops(stat_data, ops, constraints)
+    if diag is not None:
+        merge_diag(diag, op_diag)
+
     for op in ops:
         if not isinstance(op, dict):
             continue
@@ -200,7 +212,12 @@ def _apply_json_patch_ops(stat_data: dict, ops: list[dict]) -> None:
             logger.warning(f"MVU JSONPatch op 应用失败 op={op!r}: {e}")
 
 
-def _apply_update_variable_to_scope(text: str, mvu_scope: dict | None) -> dict | None:
+def _apply_update_variable_to_scope(
+    text: str,
+    mvu_scope: dict | None,
+    constraints: dict | None = None,
+    diag: dict | None = None,
+) -> dict | None:
     """Apply supported `<UpdateVariable>` blocks to `local.stat_data`."""
     if not text or "<UpdateVariable" not in text:
         return mvu_scope
@@ -227,6 +244,13 @@ def _apply_update_variable_to_scope(text: str, mvu_scope: dict | None) -> dict |
         if initvar:
             parsed = _parse_update_variable(f"<UpdateVariable>{block}</UpdateVariable>")
             if parsed is not None:
+                from app.services.mvu_runtime.update_core import (
+                    merge_diag,
+                    validate_initvar_state,
+                )
+                parsed, init_diag = validate_initvar_state(stat_data, parsed, constraints)
+                if diag is not None:
+                    merge_diag(diag, init_diag)
                 local_bucket["stat_data"] = parsed
                 stat_data = parsed
             continue
@@ -242,7 +266,7 @@ def _apply_update_variable_to_scope(text: str, mvu_scope: dict | None) -> dict |
         if not isinstance(ops, list):
             logger.warning(f"MVU <JSONPatch> 解析结果非 list (type={type(ops).__name__})")
             continue
-        _apply_json_patch_ops(stat_data, ops)
+        _apply_json_patch_ops(stat_data, ops, constraints, diag)
 
     return mvu_scope
 
@@ -283,8 +307,13 @@ async def process_assistant_message_text(
     mvu_scope: dict | None = None,
     macro_scope: dict | None = None,
     run_macro: bool = True,
+    constraints: dict | None = None,
+    update_diag: dict | None = None,
 ) -> tuple[str, str, dict | None]:
     """对一条 assistant 文本做与 LLM 输出等价的后处理，产出双管线两个视图。
+
+    ADR-0005：`constraints` 传入时，文本 `<UpdateVariable>` 的 JSONPatch 会过有界校验层
+    （_ 只读 / 类型强转 / range/enum）；校验诊断累加到 `update_diag`（供 runtime_view）。
 
     Args:
         text: 原始文本（开场白 / LLM 输出）
@@ -320,7 +349,9 @@ async def process_assistant_message_text(
 
     # 2) MVU state extraction must run before display/reply regex rewrites can
     # mutate or remove the machine-readable `<UpdateVariable>` block.
-    mvu_scope = _apply_update_variable_to_scope(precursor, mvu_scope)
+    mvu_scope = _apply_update_variable_to_scope(
+        precursor, mvu_scope, constraints, update_diag
+    )
 
     # 3) reply 阶段正则，按视图分两批跑（ADR-0003 双管线）。macro_scope 透传给
     #    RegexProcessor，让 substituteRegex 字段下的 findRegex/replaceString 也能

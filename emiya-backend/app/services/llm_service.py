@@ -74,6 +74,29 @@ async def call_deepseek_non_stream(
         raise
 
 
+def _accumulate_tool_call_deltas(acc: dict, deltas: list) -> None:
+    """把流式 delta.tool_calls 片段按 index 累积（OpenAI/DeepSeek 约定）。
+
+    acc: {index: {"id","type","function":{"name","arguments"}}}；arguments 分片拼接。
+    """
+    for d in deltas or []:
+        if not isinstance(d, dict):
+            continue
+        idx = d.get("index", 0)
+        slot = acc.setdefault(
+            idx, {"id": None, "type": "function", "function": {"name": "", "arguments": ""}}
+        )
+        if d.get("id"):
+            slot["id"] = d["id"]
+        if d.get("type"):
+            slot["type"] = d["type"]
+        fn = d.get("function") or {}
+        if fn.get("name"):
+            slot["function"]["name"] = fn["name"]
+        if fn.get("arguments"):
+            slot["function"]["arguments"] += fn["arguments"]
+
+
 async def call_deepseek_stream(
     messages: list[dict],
     temperature: float = 0.7,
@@ -81,8 +104,14 @@ async def call_deepseek_stream(
     top_p: float | None = None,
     frequency_penalty: float | None = None,
     presence_penalty: float | None = None,
+    tools: list[dict] | None = None,
+    tool_calls_out: list | None = None,
 ) -> AsyncGenerator[str, None]:
-    """调用 DeepSeek API（流式），逐 token 返回回复内容。"""
+    """调用 DeepSeek API（流式），逐 token 返回回复内容。
+
+    ADR-0005：传入 `tools` 时启用 function calling；`tool_calls_out` 若给了一个 list，
+    流结束后会被填入本次累积好的 tool_calls（单次调用同时拿 content + tool_call）。
+    """
     url = f"{settings.DEEPSEEK_BASE_URL}/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
@@ -101,7 +130,11 @@ async def call_deepseek_stream(
         payload["frequency_penalty"] = frequency_penalty
     if presence_penalty is not None:
         payload["presence_penalty"] = presence_penalty
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
 
+    tc_acc: dict = {}
     client = _get_llm_client()
     try:
         async with client.stream("POST", url, json=payload, headers=headers) as response:
@@ -117,6 +150,8 @@ async def call_deepseek_stream(
                         content = delta.get("content", "")
                         if content:
                             yield content
+                        if tools and delta.get("tool_calls"):
+                            _accumulate_tool_call_deltas(tc_acc, delta["tool_calls"])
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
     except httpx.HTTPStatusError as e:
@@ -125,6 +160,9 @@ async def call_deepseek_stream(
     except httpx.RequestError as e:
         logger.error(f"DeepSeek API 流式调用请求失败: {e}")
         raise
+    finally:
+        if tool_calls_out is not None and tc_acc:
+            tool_calls_out.extend(tc_acc[k] for k in sorted(tc_acc))
 
 
 async def call_deepseek_stream_prefix(
