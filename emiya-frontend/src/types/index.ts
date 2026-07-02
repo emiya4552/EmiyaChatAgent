@@ -394,6 +394,15 @@ export interface MvuUpdateInfo {
   dropped: Array<{ path: string | null; reason: string }>
   coerced: Array<{ path: string; from: unknown; to: unknown }>
   clamped: Array<{ path: string; to: unknown }>
+  meta?: {
+    enabled_flag?: boolean
+    persona_uses_mvu?: boolean
+    tools_sent?: boolean
+    tool_count?: number
+    mvu_update_entries?: number
+    tool_calls_received?: number
+    tool_call_names?: string[]
+  }
 }
 export interface MvuRuntimeView {
   is_mvu: boolean

@@ -129,6 +129,53 @@
               <span class="mvu-chars">{{ e.chars }}字</span>
             </li>
           </ul>
+          <div v-if="mvuRuntimeView.update" class="mvu-update">
+            <div class="mvu-update-head">
+              <span>变量更新</span>
+              <span :class="['mvu-update-channel', `is-${mvuRuntimeView.update.channel}`]">
+                {{ mvuRuntimeView.update.channel }}
+              </span>
+              <span>applied×{{ mvuRuntimeView.update.applied }}</span>
+              <span v-if="mvuRuntimeView.update.meta">
+                tool calls×{{ mvuRuntimeView.update.meta.tool_calls_received ?? 0 }}
+              </span>
+            </div>
+            <div v-if="mvuRuntimeView.update.meta" class="mvu-update-meta">
+              <span>enabled={{ formatBool(mvuRuntimeView.update.meta.enabled_flag) }}</span>
+              <span>uses_mvu={{ formatBool(mvuRuntimeView.update.meta.persona_uses_mvu) }}</span>
+              <span>tools_sent={{ formatBool(mvuRuntimeView.update.meta.tools_sent) }}</span>
+              <span>tools×{{ mvuRuntimeView.update.meta.tool_count ?? 0 }}</span>
+              <span>[mvu_update]×{{ mvuRuntimeView.update.meta.mvu_update_entries ?? 0 }}</span>
+            </div>
+            <details
+              v-if="hasUpdateDetails(mvuRuntimeView.update)"
+              class="mvu-update-details"
+            >
+              <summary>更新细节</summary>
+              <div v-if="mvuRuntimeView.update.coerced.length">
+                <strong>coerced</strong>
+                <p v-for="(item, i) in mvuRuntimeView.update.coerced" :key="`coerced-${i}`">
+                  {{ item.path }}: {{ formatDiagValue(item.from) }} → {{ formatDiagValue(item.to) }}
+                </p>
+              </div>
+              <div v-if="mvuRuntimeView.update.clamped.length">
+                <strong>clamped</strong>
+                <p v-for="(item, i) in mvuRuntimeView.update.clamped" :key="`clamped-${i}`">
+                  {{ item.path }} → {{ formatDiagValue(item.to) }}
+                </p>
+              </div>
+              <div v-if="mvuRuntimeView.update.dropped.length">
+                <strong>dropped</strong>
+                <p v-for="(item, i) in mvuRuntimeView.update.dropped" :key="`dropped-${i}`">
+                  {{ item.path || '(unknown)' }}: {{ item.reason }}
+                </p>
+              </div>
+              <div v-if="mvuRuntimeView.update.meta?.tool_call_names?.length">
+                <strong>tool calls</strong>
+                <p>{{ mvuRuntimeView.update.meta.tool_call_names.join(', ') }}</p>
+              </div>
+            </details>
+          </div>
           <p v-for="(d, i) in mvuRuntimeView.diagnostics" :key="'d' + i" class="mvu-diag">{{ d }}</p>
         </div>
         <div v-if="variablesEntries.length === 0" class="empty-vars">
@@ -228,6 +275,7 @@ import { fetchTemplates } from '../../api/template'
 import { fetchRegexPresets } from '../../api/regexPreset'
 import type {
   ChatConfig, WorldbookListItem, PresetInfo, TemplateListItem, RegexPresetInfo,
+  MvuUpdateInfo,
 } from '../../types'
 
 const props = defineProps<{ visible: boolean }>()
@@ -314,6 +362,28 @@ function formatDateTime(v: string): string {
   const d = new Date(v)
   if (Number.isNaN(d.getTime())) return v
   return d.toLocaleString()
+}
+
+function formatBool(v: unknown): string {
+  return v ? 'true' : 'false'
+}
+
+function formatDiagValue(v: unknown): string {
+  if (typeof v === 'string') return v
+  try {
+    return JSON.stringify(v)
+  } catch {
+    return String(v)
+  }
+}
+
+function hasUpdateDetails(update: MvuUpdateInfo): boolean {
+  return Boolean(
+    update.coerced.length ||
+    update.clamped.length ||
+    update.dropped.length ||
+    update.meta?.tool_call_names?.length
+  )
 }
 
 async function resetVariables() {
@@ -605,6 +675,44 @@ async function handleSave() {
   color: var(--color-text-secondary);
 }
 .mvu-chars { flex: none; color: var(--color-text-tertiary); }
+.mvu-update {
+  border-top: 1px solid var(--color-border, #eee);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.mvu-update-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.mvu-update-channel {
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  border: 1px solid var(--color-border, #ddd);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.mvu-update-channel.is-tool { color: #18a058; border-color: #18a058; }
+.mvu-update-channel.is-text { color: #2080f0; border-color: #2080f0; }
+.mvu-update-channel.is-none { color: #d03050; border-color: #d03050; }
+.mvu-update-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+}
+.mvu-update-details {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.mvu-update-details summary { cursor: pointer; }
+.mvu-update-details p { margin: 3px 0; word-break: break-all; }
 .mvu-diag {
   margin: 6px 0 0; font-size: 11px; line-height: 1.5;
   color: var(--color-text-tertiary);

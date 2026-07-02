@@ -373,6 +373,28 @@ def test_build_runtime_view_empty_for_non_mvu():
     assert build_runtime_view(None)["is_mvu"] is False
 
 
+def test_build_runtime_view_includes_update_tool_meta():
+    view = build_runtime_view(
+        [{"comment": "[mvu_update] rules", "content": "score: 0~100"}],
+        update_diag={"applied": 0, "dropped": [], "coerced": [], "clamped": []},
+        update_channel="none",
+        update_meta={
+            "enabled_flag": True,
+            "persona_uses_mvu": True,
+            "tools_sent": True,
+            "tool_count": 1,
+            "mvu_update_entries": 1,
+            "tool_calls_received": 0,
+            "tool_call_names": [],
+        },
+    )
+
+    assert view["update"]["meta"]["enabled_flag"] is True
+    assert view["update"]["meta"]["tools_sent"] is True
+    assert view["update"]["meta"]["tool_calls_received"] == 0
+    assert any("tool_calls=0" in d for d in view["diagnostics"])
+
+
 # ─── ADR-0004：变量驱动扫描（默认关闭 / 白名单） ───
 
 from app.services.mvu_runtime import build_mvu_scan_text  # noqa: E402
@@ -572,3 +594,50 @@ def test_accumulate_tool_call_deltas_concatenates_arguments():
     assert acc[0]["id"] == "call_1"
     assert acc[0]["function"]["name"] == "update_variables"
     assert acc[0]["function"]["arguments"] == '{"patch":[]}'
+
+
+# ─── ADR-0006：宽容解析裸 JSONPatch 数组 + tool 引导 ───
+
+from app.services.message_pipeline import _apply_update_variable_to_scope  # noqa: E402
+
+
+def test_bare_jsonpatch_array_without_jsonpatch_tag_is_applied():
+    # 复现日志：模型丢了 <JSONPatch> 标签，<Analysis> 后直接裸写数组
+    text = """你把手伸向她……
+<UpdateVariable>
+<Analysis>
+- user存在创口: true [still bleeding]
+- 伶伶当前形态: 0->1
+</Analysis>
+[
+  { "op": "replace", "path": "/伶伶/当前形态", "value": 1 },
+  { "op": "replace", "path": "/伶伶/当前情绪", "value": "发情" },
+  { "op": "delta", "path": "/伶伶/当前好感度", "value": 2 }
+]
+</UpdateVariable>"""
+    scope = {"local": {"stat_data": {"伶伶": {"当前形态": 0, "当前情绪": "平静", "当前好感度": 15}}},
+             "global": {}, "names": {}}
+
+    out = _apply_update_variable_to_scope(text, scope)
+
+    sd = out["local"]["stat_data"]["伶伶"]
+    assert sd["当前形态"] == 1
+    assert sd["当前情绪"] == "发情"
+    assert sd["当前好感度"] == 17
+
+
+def test_bare_array_still_respects_validation_layer():
+    text = """<UpdateVariable>[
+  { "op": "replace", "path": "/好感度", "value": 999 },
+  { "op": "replace", "path": "/_readonly", "value": 1 }
+]</UpdateVariable>"""
+    scope = {"local": {"stat_data": {"好感度": 40, "_readonly": 0}}, "global": {}, "names": {}}
+    constraints = {"好感度": {"type": "number", "min": 0, "max": 100}}
+    diag = {"applied": 0, "dropped": [], "coerced": [], "clamped": []}
+
+    out = _apply_update_variable_to_scope(text, scope, constraints, diag)
+
+    sd = out["local"]["stat_data"]
+    assert sd["好感度"] == 100          # clamp 生效
+    assert sd["_readonly"] == 0         # 只读未被改
+    assert any("只读" in d["reason"] for d in diag["dropped"])

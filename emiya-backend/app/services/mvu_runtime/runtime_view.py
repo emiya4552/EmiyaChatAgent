@@ -45,6 +45,7 @@ def build_runtime_view(
     scan_items: list[dict] | None = None,
     update_diag: dict | None = None,
     update_channel: str | None = None,
+    update_meta: dict | None = None,
 ) -> dict:
     """从本轮激活集派生 MVU 诊断视图。
 
@@ -109,13 +110,23 @@ def build_runtime_view(
         )
 
     update_diag = update_diag or {}
+    update_meta = update_meta or {}
     update = {
         "channel": update_channel or "none",
         "applied": update_diag.get("applied", 0),
         "dropped": update_diag.get("dropped", []),
         "coerced": update_diag.get("coerced", []),
         "clamped": update_diag.get("clamped", []),
+        "meta": update_meta,
     }
+    if update_meta:
+        diagnostics.append(
+            "ADR-0005 tool: "
+            f"enabled={bool(update_meta.get('enabled_flag'))}, "
+            f"persona_uses_mvu={bool(update_meta.get('persona_uses_mvu'))}, "
+            f"tools_sent={bool(update_meta.get('tools_sent'))}, "
+            f"tool_calls={int(update_meta.get('tool_calls_received') or 0)}"
+        )
     if update["applied"] or update["dropped"] or update["coerced"] or update["clamped"]:
         parts = [f"更新通道={update['channel']}", f"应用 {update['applied']} 个 op（ADR-0005）"]
         if update["coerced"]:

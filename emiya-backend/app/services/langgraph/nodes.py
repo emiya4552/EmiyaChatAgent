@@ -684,6 +684,22 @@ async def node_build_prompt(state: ChatState) -> dict:
                     ANCHOR_KEY: ANCHOR_AUTHOR_NOTE,
                 })
 
+        # ── ADR-0006：tool 模式下把 [mvu_update] 从 prompt 注入里摘掉 ──
+        # 这些条目命令模型"在正文输出 <UpdateVariable> 文本"，会和 update_variables 工具
+        # 竞争、让模型走文本通道。其内容已进 tool description，这里只从**注入**移除
+        # （state["wi_activated"] 不动，工具描述/诊断仍拿全量），并追加一句"用工具"引导。
+        # 注意：`persona_uses_mvu` 要到本节点 return 时才写进 state，这里 state.get 拿不到；
+        # 直接读本节点已加载的 persona 对象（见上文 persona = ... 处）。
+        tool_update_mode = bool(
+            settings.MVU_TOOL_UPDATE_ENABLED and persona and getattr(persona, "uses_mvu", False)
+        )
+        if tool_update_mode and wi_activated:
+            from app.services.mvu_runtime.runtime_view import classify_mvu_comment
+            wi_activated = [
+                e for e in wi_activated
+                if classify_mvu_comment(e.get("comment")) != "update"
+            ]
+
         # ── Worldbook 注入：按 8 个 position 分发 ──
         if wi_activated:
             wi_as_active = [
@@ -745,6 +761,10 @@ async def node_build_prompt(state: ChatState) -> dict:
                 rendered.append({"role": "system", "content": directive})
                 logger.info(f"[尾部模板兜底] 注入约束：{templates}")
 
+        # ── ADR-0006：tool 模式引导，替代被摘掉的 [mvu_update] 文本指令 ──
+        if tool_update_mode:
+            rendered.append({"role": "system", "content": _MVU_TOOL_DIRECTIVE})
+
         # squash 策略：仅在有预设时合并连续 system 消息。
         # 理由：预设 position=0/1 注入会产生多块紧邻的 system，合并为单条以满足
         # OpenAI Chat Completion 单 system 约束（DeepSeek 容忍多 system 但合并更稳）；
@@ -796,6 +816,15 @@ _TEMPLATE_SINGLE_BRACE = _re.compile(r"\{[^{}\n]{1,100}\}")
 # 追加的 HTML 显示模板——绝不能被尾部模板兜底/续写当成输出模板，否则会注入错误约束
 # 文案并每轮空烧一次 prefix 续写。详见 docs/mvu/adr/0003（标签拦截）。
 _MVU_TAG_RE = _re.compile(r"\[(?:mvu_update|mvu_plot|mvu_status|initvar|opening)\]", _re.I)
+
+# ADR-0006：tool 模式下替代 [mvu_update] 文本指令的引导（[mvu_update] 已从注入摘除）
+_MVU_TOOL_DIRECTIVE = (
+    "[状态更新 — 工具模式]\n"
+    "本轮若剧情导致角色状态变量（stat_data）发生变化，请**调用 update_variables 工具**"
+    "提交一组 JSON Patch 变更；**不要**在回复正文里输出 <UpdateVariable> / <JSONPatch> "
+    "文本块。若本轮无任何变化，可以不调用该工具。变量字段、取值范围与更新规则见 "
+    "update_variables 工具说明。"
+)
 
 
 def _is_mvu_tagged_entry(entry: dict) -> bool:

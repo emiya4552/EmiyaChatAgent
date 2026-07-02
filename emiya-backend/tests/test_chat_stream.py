@@ -178,6 +178,10 @@ async def test_tool_only_mvu_update_is_applied_without_content(
     assert done["mvu_runtime_view"]["update"]["channel"] == "tool"
     assert done["mvu_runtime_view"]["update"]["applied"] == 1
     assert done["mvu_runtime_view"]["update"]["clamped"][0]["path"] == "/score"
+    assert done["mvu_runtime_view"]["update"]["meta"]["enabled_flag"] is True
+    assert done["mvu_runtime_view"]["update"]["meta"]["tools_sent"] is True
+    assert done["mvu_runtime_view"]["update"]["meta"]["tool_calls_received"] == 1
+    assert done["mvu_runtime_view"]["update"]["meta"]["tool_call_names"] == ["update_variables"]
 
     async with AsyncSessionLocal() as session:
         conv = await session.get(Conversation, test_conversation.id)

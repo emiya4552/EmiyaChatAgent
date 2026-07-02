@@ -206,9 +206,37 @@ async def process_chat(
     # content + update_variables tool_call；tool_calls_acc 在流结束后被填充。
     mvu_tools = None
     tool_calls_acc: list = []
+    wi_activated_for_tool = final_state.get("wi_activated") or []
+    mvu_update_entry_count = sum(
+        1
+        for e in wi_activated_for_tool
+        if "[mvu_update]" in str((e or {}).get("comment") or "").lower()
+    )
+    mvu_tool_meta = {
+        "enabled_flag": bool(settings.MVU_TOOL_UPDATE_ENABLED),
+        "persona_uses_mvu": bool(final_state.get("persona_uses_mvu")),
+        "tools_sent": False,
+        "tool_count": 0,
+        "mvu_update_entries": mvu_update_entry_count,
+        "tool_calls_received": 0,
+        "tool_call_names": [],
+    }
     if settings.MVU_TOOL_UPDATE_ENABLED and final_state.get("persona_uses_mvu"):
         from app.services.mvu_runtime.tools import build_update_variables_tool
         mvu_tools = [build_update_variables_tool(final_state.get("wi_activated"))]
+        mvu_tool_meta["tools_sent"] = True
+        mvu_tool_meta["tool_count"] = len(mvu_tools)
+    final_state["mvu_tool_meta"] = mvu_tool_meta
+    logger.info(
+        "[MVU-ADR5] tool gate conv=%s enabled=%s persona_uses_mvu=%s "
+        "tools_sent=%s tool_count=%s mvu_update_entries=%s",
+        conversation_id,
+        mvu_tool_meta["enabled_flag"],
+        mvu_tool_meta["persona_uses_mvu"],
+        mvu_tool_meta["tools_sent"],
+        mvu_tool_meta["tool_count"],
+        mvu_tool_meta["mvu_update_entries"],
+    )
 
     try:
         async for token in call_deepseek_stream(
@@ -240,6 +268,22 @@ async def process_chat(
             error_data["partial_message_id"] = partial_message_id
         yield f"event: error\ndata: {json.dumps(error_data, ensure_ascii=False)}\n\n"
         return
+
+    mvu_tool_meta["tool_calls_received"] = len(tool_calls_acc)
+    mvu_tool_meta["tool_call_names"] = [
+        str(((tc or {}).get("function") or {}).get("name") or "")
+        for tc in tool_calls_acc
+    ]
+    final_state["mvu_tool_meta"] = mvu_tool_meta
+    logger.info(
+        "[MVU-ADR5] stream done conv=%s content_chunks=%s content_chars=%s "
+        "tool_calls=%s tool_call_names=%s",
+        conversation_id,
+        len(buffer),
+        len("".join(buffer)),
+        mvu_tool_meta["tool_calls_received"],
+        mvu_tool_meta["tool_call_names"],
+    )
 
     final_state["assistant_reply"] = "".join(buffer)
     final_state["mvu_tool_calls"] = tool_calls_acc
@@ -312,6 +356,7 @@ async def process_chat(
         scan_items=final_state.get("mvu_scan_items"),
         update_diag=final_state.get("mvu_update_diag"),
         update_channel=final_state.get("mvu_update_channel"),
+        update_meta=final_state.get("mvu_tool_meta"),
     )
     yield f"event: message_done\ndata: {json.dumps(msg_done_data, ensure_ascii=False)}\n\n"
     await _broadcast(conversation_id, "message_done", msg_done_data)

@@ -36,6 +36,51 @@ _JSON_PATCH_RE = re.compile(
     r"<(?:JSONPatch|json_patch)\b[^>]*>(.*?)</(?:JSONPatch|json_patch)>",
     re.DOTALL | re.IGNORECASE,
 )
+# ADR-0006：模型常把 <JSONPatch> 标签丢掉、只在 <UpdateVariable> 里裸写 JSON 数组，
+# 甚至只写 <Analysis> 之后接一个 `[...]`。宽容解析要剥掉 Analysis 再兜底找裸数组。
+_ANALYSIS_RE = re.compile(r"<Analysis\b[^>]*>.*?</Analysis>", re.DOTALL | re.IGNORECASE)
+
+
+def _find_balanced_array(s: str) -> str | None:
+    """从 s 里找第一个配平的 `[...]`（考虑字符串与转义），返回原文切片或 None。"""
+    start = s.find("[")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return s[start:i + 1]
+    return None
+
+
+def _extract_patch_array_text(block: str) -> str | None:
+    """从一个 <UpdateVariable> 块里取 JSON Patch 数组文本。
+
+    ADR-0006 宽容化：优先 `<JSONPatch>…</JSONPatch>`；没有标签时，剥掉 `<Analysis>` 段
+    再兜底找裸 `[...]` 数组（对齐真实 MVU bundle 的宽容解析）。
+    """
+    m = _JSON_PATCH_RE.search(block)
+    if m:
+        return m.group(1)
+    stripped = _ANALYSIS_RE.sub("", block)
+    return _find_balanced_array(stripped)
 
 
 def _parse_update_variable(text: str) -> dict | None:
@@ -226,7 +271,7 @@ def _apply_update_variable_to_scope(
         return mvu_scope
     blocks = [
         block for block in blocks
-        if _INITVAR_RE.search(block) or _JSON_PATCH_RE.search(block)
+        if _INITVAR_RE.search(block) or _extract_patch_array_text(block) is not None
     ]
     if not blocks:
         return mvu_scope
@@ -255,16 +300,16 @@ def _apply_update_variable_to_scope(
                 stat_data = parsed
             continue
 
-        patch = _JSON_PATCH_RE.search(block)
-        if not patch:
+        raw = _extract_patch_array_text(block)
+        if raw is None:
             continue
         try:
-            ops = json.loads(patch.group(1))
+            ops = json.loads(raw)
         except Exception as e:
-            logger.warning(f"MVU <JSONPatch> 解析失败: {e}")
+            logger.warning(f"MVU JSONPatch 解析失败（宽容模式）: {e}")
             continue
         if not isinstance(ops, list):
-            logger.warning(f"MVU <JSONPatch> 解析结果非 list (type={type(ops).__name__})")
+            logger.warning(f"MVU JSONPatch 解析结果非 list (type={type(ops).__name__})")
             continue
         _apply_json_patch_ops(stat_data, ops, constraints, diag)
 
