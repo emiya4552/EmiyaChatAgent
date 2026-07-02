@@ -185,6 +185,7 @@ def scan_worldbook(
     worldbooks: list[dict],
     history_messages: list[dict],
     chat_config: dict,
+    extra_scan_text: str = "",
 ) -> list[ActiveEntry]:
     """扫描所有绑定的世界书，返回激活集。
 
@@ -192,6 +193,9 @@ def scan_worldbook(
         worldbooks: list of {id, name, scan_depth, case_sensitive, match_whole_words, entries[], extensions}
         history_messages: 聊天历史，旧 → 新顺序（dict 含 role, content）
         chat_config: 对话的 chat_config（读 worldbook_budget_pct / cap / max_context）
+        extra_scan_text: MVU 变量驱动扫描文本（ADR-0004，默认关闭时为空）。非空时会被
+            **无视 scan_depth 地**追加到每条 selective 条目的扫描缓冲区，让当前变量
+            驱动关键词激活。
 
     Returns:
         激活的 ActiveEntry 列表，已按 order 降序排序。
@@ -253,6 +257,13 @@ def scan_worldbook(
                     )
                 )
                 scan_buffer = _build_scan_buffer(history_messages, scan_depth)
+                if extra_scan_text:
+                    # MVU 变量驱动扫描文本无视 scan_depth，始终参与匹配（ADR-0004）
+                    scan_buffer = (
+                        f"{scan_buffer}\n\x01{extra_scan_text}"
+                        if scan_buffer
+                        else f"\x01{extra_scan_text}"
+                    )
                 if scan_buffer:
                     activated = _check_entry_keys(entry, scan_buffer, book_default)
 

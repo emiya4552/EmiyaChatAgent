@@ -141,7 +141,7 @@ async def create_conversation(
             },
         }
         from app.services.message_pipeline import process_assistant_message_text
-        greeting_text, updated_scope = await process_assistant_message_text(
+        greeting_text, greeting_display, updated_scope = await process_assistant_message_text(
             greeting_text,
             db=db,
             conv=conversation,
@@ -158,6 +158,7 @@ async def create_conversation(
             conversation_id=conversation.id,
             role="assistant",
             content=greeting_text,
+            display_content=greeting_display,
         )
         db.add(greeting)
 

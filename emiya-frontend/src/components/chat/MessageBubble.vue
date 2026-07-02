@@ -93,9 +93,14 @@ const isStreamingMsg = computed(
   () => chatStore.isStreaming && props.isLast && props.message.role === 'assistant'
 )
 
-// ADR-0015：reply 正则已上移到后端 message_pipeline，DB 里的 content 即最终展示版本。
-// 前端不再做"渲染时正则替换"——简化为直接显示 message.content。
-const displayContent = computed(() => props.message.content)
+// ADR-0003 双管线：优先渲染后端派生的 display_content（markdownOnly 美化后，含
+// 状态栏 HTML / UpdateVariable 折叠等）；流式期间和老消息 display_content 为空时
+// 回退 content。前端仍不做"渲染时正则替换"，正则由后端分 prompt/显示两批跑。
+const displayContent = computed(() =>
+  props.message.display_content != null
+    ? props.message.display_content
+    : props.message.content,
+)
 
 const avatarBg = computed(() => avatarColor(props.personaName || 'AI'))
 const avatarInitial = computed(() => (props.personaName || 'AI')[0])

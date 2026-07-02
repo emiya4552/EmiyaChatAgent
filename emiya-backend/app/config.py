@@ -118,6 +118,13 @@ class Settings(BaseSettings):
     WORLDBOOK_TAIL_CONTINUATION_MAX: int = 3  # 每轮最多续写 K 个模板
     WORLDBOOK_TAIL_CONTINUATION_MAX_TOKENS: int = 800  # 单次续写 max_tokens
 
+    # MVU 变量驱动世界书扫描白名单（ADR-0004，WuWa 档，**默认关闭**）：
+    # 把选定的 stat_data 点路径渲染成扫描文本喂给世界书扫描器，让"带关键词的条目"
+    # 能被当前变量激活（近似 ST 里 calculateStoryLogic 注入 should_scan 触发器的效果，
+    # 但不执行任何卡内 JS，是尽力而为的替代）。空列表 = 关闭，不做任何额外扫描。
+    # 也可按对话覆盖：conv.chat_config["mvu_scan_variable_paths"]。
+    MVU_SCAN_VARIABLE_PATHS: list[str] = []
+
     # MVU <UpdateVariable> 续写兜底（详见 ADR-0010）：
     # persona.uses_mvu=True 且主回复无 <UpdateVariable> 时，用 DeepSeek prefix
     # completion 强制续写状态变量 YAML 块。变量树可能很大，max_tokens 留 3000

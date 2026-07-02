@@ -208,13 +208,16 @@ async function handleSwitchGreeting(newIdx: number) {
   greetingSwitching.value = true
   try {
     const res = await switchGreeting(convId, newIdx)
-    // 用后端返回的清洗后文本替换本地 message[0]
+    // 用后端返回的清洗后文本替换本地 message[0]（content=prompt 版，
+    // display_content=显示版，ADR-0003 双管线）
     const target = chatStore.messages.find(m => m.id === res.message_id)
     if (target) {
       target.content = res.content
+      target.display_content = res.display_content ?? null
     } else if (chatStore.messages.length > 0) {
       // 兜底：用 id 找不到时（不该发生），覆盖第一条并同步 id
       chatStore.messages[0].content = res.content
+      chatStore.messages[0].display_content = res.display_content ?? null
       chatStore.messages[0].id = res.message_id
     }
     currentGreetingIdx.value = newIdx

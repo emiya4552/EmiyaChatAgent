@@ -248,9 +248,13 @@ def _apply_update_variable_to_scope(text: str, mvu_scope: dict | None) -> dict |
 
 
 async def _load_reply_scripts(db: AsyncSession, conv: Conversation) -> list[dict]:
-    """加载该 conv 当前生效的 reply 阶段正则脚本 (promptOnly=false 部分)。
+    """加载该 conv 当前生效的全部 AI_OUTPUT 阶段正则脚本（不按视图过滤）。
 
     优先级：conv.regex_preset_id > preset.regex_preset_id。fallback 为空。
+    视图划分（promptOnly / markdownOnly）由 process_assistant_message_text 完成：
+      - prompt 真相版：not markdownOnly（promptOnly + neither）
+      - 显示版：      not promptOnly（markdownOnly + neither）
+    详见 docs/mvu/adr/0003 双管线。
     """
     regex_preset_id = conv.regex_preset_id
     if regex_preset_id is None and conv.preset_id:
@@ -267,9 +271,8 @@ async def _load_reply_scripts(db: AsyncSession, conv: Conversation) -> list[dict
     rp = await get_regex_preset(db, regex_preset_id)
     if rp is None:
         return []
-    # 返回所有 promptOnly=false 的脚本；RegexProcessor.apply_reply_to_text 内部
-    # 还会再过滤 disabled，这里不重复
-    return [s for s in (rp.scripts or []) if not s.get("promptOnly", False)]
+    # disabled 由 RegexProcessor.apply_reply_to_text 过滤，这里全量返回
+    return list(rp.scripts or [])
 
 
 async def process_assistant_message_text(
@@ -280,8 +283,8 @@ async def process_assistant_message_text(
     mvu_scope: dict | None = None,
     macro_scope: dict | None = None,
     run_macro: bool = True,
-) -> tuple[str, dict | None]:
-    """对一条 assistant 文本做与 LLM 输出等价的后处理。
+) -> tuple[str, str, dict | None]:
+    """对一条 assistant 文本做与 LLM 输出等价的后处理，产出双管线两个视图。
 
     Args:
         text: 原始文本（开场白 / LLM 输出）
@@ -293,33 +296,53 @@ async def process_assistant_message_text(
         run_macro: False 时即使给了 macro_scope 也跳过（如 LLM 真实输出，不带宏占位符）
 
     Returns:
-        (processed_text, updated_mvu_scope)：scope 已就地修改，但也返回方便链式。
+        (content, display_content, updated_mvu_scope)，详见 docs/mvu/adr/0003：
+          - content: **prompt 真相版**（进 history）。只烘"两边都生效"（既非
+            promptOnly 也非 markdownOnly）的 AI_OUTPUT 脚本。markdownOnly 美化不进来
+            （history 不膨胀）；promptOnly 脚本**不在此烘**——它们按楼层深度生效，
+            交给 prompt 组装阶段的 `RegexProcessor.apply_prompt_only`（node_build_prompt，
+            depth-aware）处理，若在这里按单串烘会让 minDepth/maxDepth 失效。
+          - display_content: **显示版**（前端渲染）。跑 not promptOnly 的脚本
+            （markdownOnly + 两边都生效）→ 含状态栏 HTML / UpdateVariable 折叠等美化。
+        两者从同一 precursor（宏渲染 + MVU 提取后）分叉，无法互相反推。
     """
     if not text:
-        return text, mvu_scope
+        return text, text, mvu_scope
 
-    processed = text
+    precursor = text
 
     # 1) MacroEngine
     if run_macro and macro_scope is not None:
         try:
-            processed = MacroEngine.render(processed, macro_scope)
+            precursor = MacroEngine.render(precursor, macro_scope)
         except Exception:
             logger.exception("MacroEngine 渲染失败，保留原文")
 
     # 2) MVU state extraction must run before display/reply regex rewrites can
     # mutate or remove the machine-readable `<UpdateVariable>` block.
-    mvu_scope = _apply_update_variable_to_scope(processed, mvu_scope)
+    mvu_scope = _apply_update_variable_to_scope(precursor, mvu_scope)
 
-    # 3) reply 阶段正则——把 macro_scope 透传给 RegexProcessor，让 substituteRegex
-    #    字段下的 findRegex/replaceString 也能跑 {{user}}/{{char}} 等 ST 宏（ADR-0016）
+    # 3) reply 阶段正则，按视图分两批跑（ADR-0003 双管线）。macro_scope 透传给
+    #    RegexProcessor，让 substituteRegex 字段下的 findRegex/replaceString 也能
+    #    跑 {{user}}/{{char}} 等 ST 宏（ADR-0016）。
+    content = precursor
+    display_content = precursor
     try:
         scripts = await _load_reply_scripts(db, conv)
         if scripts:
-            processed = RegexProcessor.apply_reply_to_text(
-                processed, scripts, macro_scope=macro_scope,
+            # content 只烘"两边都生效"的脚本；promptOnly 留给 build 阶段（depth-aware）
+            prompt_scripts = [
+                s for s in scripts
+                if not s.get("markdownOnly", False) and not s.get("promptOnly", False)
+            ]
+            display_scripts = [s for s in scripts if not s.get("promptOnly", False)]
+            content = RegexProcessor.apply_reply_to_text(
+                precursor, prompt_scripts, macro_scope=macro_scope,
+            )
+            display_content = RegexProcessor.apply_reply_to_text(
+                precursor, display_scripts, macro_scope=macro_scope,
             )
     except Exception:
         logger.exception("reply 阶段正则跑挂，保留前一步结果")
 
-    return processed, mvu_scope
+    return content, display_content, mvu_scope

@@ -115,6 +115,22 @@
             {{ mvuState.warnings[0] }}
           </p>
         </div>
+        <div v-if="mvuRuntimeView?.is_mvu" class="mvu-runtime">
+          <div class="mvu-runtime-head">
+            MVU 运行时诊断（上一轮）
+            <span class="mvu-runtime-counts">
+              <span v-for="(n, role) in mvuRuntimeView.counts" :key="role">{{ role }}×{{ n }}</span>
+            </span>
+          </div>
+          <ul class="mvu-runtime-list">
+            <li v-for="(e, i) in mvuRuntimeView.entries" :key="i" :title="e.role_label">
+              <span class="mvu-role">{{ e.role }}</span>
+              <span class="mvu-comment" :title="e.comment">{{ e.comment }}</span>
+              <span class="mvu-chars">{{ e.chars }}字</span>
+            </li>
+          </ul>
+          <p v-for="(d, i) in mvuRuntimeView.diagnostics" :key="'d' + i" class="mvu-diag">{{ d }}</p>
+        </div>
         <div v-if="variablesEntries.length === 0" class="empty-vars">
           当前对话尚未设置任何变量
         </div>
@@ -198,6 +214,7 @@ import {
   NSwitch, useMessage,
 } from 'naive-ui'
 import { useConversationStore } from '../../stores/conversation'
+import { useChatStore } from '../../stores/chat'
 import {
   updateConversationConfig, updateConversationToggles, clearConversationVariables,
   reloadMvuInitialState,
@@ -217,7 +234,10 @@ const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const convStore = useConversationStore()
+const chatStore = useChatStore()
 const message = useMessage()
+// MVU 诊断运行时视图（ADR-0003 §3）：随最近一轮 message_done 派生
+const mvuRuntimeView = computed(() => chatStore.mvuRuntimeView)
 const saving = ref(false)
 
 const currentConv = computed(() =>
@@ -558,5 +578,35 @@ async function handleSave() {
   margin: 6px 0 0;
   color: #d03050;
   font-size: 12px;
+}
+.mvu-runtime {
+  border: 1px solid var(--color-border, #eee);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  background: var(--color-bg-surface-elevated, #fafafa);
+}
+.mvu-runtime-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12px; font-weight: 600; color: var(--color-text-secondary);
+}
+.mvu-runtime-counts { display: flex; gap: 8px; font-weight: 400; }
+.mvu-runtime-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.mvu-runtime-list li {
+  display: flex; gap: 8px; align-items: baseline;
+  font-size: 12px; padding: 2px 0;
+}
+.mvu-role {
+  flex: none; min-width: 44px;
+  color: #2080f0; font-family: monospace;
+}
+.mvu-comment {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.mvu-chars { flex: none; color: var(--color-text-tertiary); }
+.mvu-diag {
+  margin: 6px 0 0; font-size: 11px; line-height: 1.5;
+  color: var(--color-text-tertiary);
 }
 </style>

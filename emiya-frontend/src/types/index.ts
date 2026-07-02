@@ -367,7 +367,32 @@ export interface Message {
   conversation_id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  // 显示版（ADR-0003 双管线）：markdownOnly 美化后的文本。为空/缺省时回退 content
+  display_content?: string | null
   created_at: string
+}
+
+// MVU 诊断运行时视图（ADR-0003 §3）：只读诊断，随 message_done 派生，不持久化
+export interface MvuRuntimeViewEntry {
+  role: 'update' | 'status' | 'plot' | 'initvar' | 'opening'
+  role_label: string
+  comment: string
+  worldbook_id?: string | null
+  worldbook_name?: string | null
+  chars: number
+  injected_as_prompt: boolean
+}
+export interface MvuScanItem {
+  path: string
+  found: boolean
+  value_preview: string
+}
+export interface MvuRuntimeView {
+  is_mvu: boolean
+  counts: Record<string, number>
+  entries: MvuRuntimeViewEntry[]
+  scan_items?: MvuScanItem[]
+  diagnostics: string[]
 }
 
 // ─── 正则预设 ───
