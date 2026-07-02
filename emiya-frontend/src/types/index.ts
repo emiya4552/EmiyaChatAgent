@@ -387,11 +387,20 @@ export interface MvuScanItem {
   found: boolean
   value_preview: string
 }
+// ADR-0005：本轮更新校验诊断
+export interface MvuUpdateInfo {
+  channel: 'tool' | 'text' | 'none'
+  applied: number
+  dropped: Array<{ path: string | null; reason: string }>
+  coerced: Array<{ path: string; from: unknown; to: unknown }>
+  clamped: Array<{ path: string; to: unknown }>
+}
 export interface MvuRuntimeView {
   is_mvu: boolean
   counts: Record<string, number>
   entries: MvuRuntimeViewEntry[]
   scan_items?: MvuScanItem[]
+  update?: MvuUpdateInfo
   diagnostics: string[]
 }
 

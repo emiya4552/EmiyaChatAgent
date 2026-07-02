@@ -95,6 +95,95 @@ async def test_no_duplicate_message_done(
 # ─── B5: 中断路径 error 带 partial_message_id ─────────────────────
 
 
+async def test_tool_only_mvu_update_is_applied_without_content(
+    client, auth_headers, test_conversation, mock_deepseek_normal, monkeypatch,
+):
+    from app.config import settings
+    from app.models.conversation import Conversation
+    from app.models.persona import Persona
+    from app.models.worldbook import Worldbook
+
+    monkeypatch.setattr(settings, "MVU_TOOL_UPDATE_ENABLED", True)
+
+    async def _emit_tool_only(*args, **kwargs):
+        assert kwargs.get("tools")
+        tool_calls_out = kwargs.get("tool_calls_out")
+        if tool_calls_out is not None:
+            tool_calls_out.append({
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "update_variables",
+                    "arguments": json.dumps({
+                        "patch": [
+                            {"op": "replace", "path": "/score", "value": "150"}
+                        ]
+                    }),
+                },
+            })
+        if False:
+            yield ""
+
+    monkeypatch.setattr(
+        "app.services.chat_service.call_deepseek_stream",
+        _emit_tool_only,
+    )
+
+    async with AsyncSessionLocal() as session:
+        persona = await session.get(Persona, test_conversation.persona_id)
+        persona.uses_mvu = True
+
+        worldbook = Worldbook(
+            id=uuid.uuid4(),
+            user_id=test_conversation.user_id,
+            name="mvu rules",
+            entries=[
+                {
+                    "uid": 1,
+                    "comment": "[mvu_update] rules",
+                    "content": (
+                        "rules:\n"
+                        "  score:\n"
+                        "    type: number\n"
+                        "    range: 0~100\n"
+                    ),
+                    "enabled": True,
+                    "constant": True,
+                    "selective": False,
+                    "position": 0,
+                    "order": 0,
+                    "role": "system",
+                }
+            ],
+        )
+        conv = await session.get(Conversation, test_conversation.id)
+        conv.worldbook_ids = [str(worldbook.id)]
+        conv.variables = {"stat_data": {"score": 40}}
+        session.add(worldbook)
+        await session.commit()
+
+    response = await client.post(
+        f"/api/v1/conversations/{test_conversation.id}/chat",
+        json={"content": "update score", "reply_length": "short"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+
+    events = _parse_sse(response.text)
+    done_events = [e for e in events if e["event"] == "message_done"]
+    assert len(done_events) == 1
+
+    done = done_events[0]["data"]
+    assert done["variables"]["stat_data"]["score"] == 100
+    assert done["mvu_runtime_view"]["update"]["channel"] == "tool"
+    assert done["mvu_runtime_view"]["update"]["applied"] == 1
+    assert done["mvu_runtime_view"]["update"]["clamped"][0]["path"] == "/score"
+
+    async with AsyncSessionLocal() as session:
+        conv = await session.get(Conversation, test_conversation.id)
+        assert conv.variables["stat_data"]["score"] == 100
+
+
 async def test_error_carries_partial_message_id_on_interrupt(
     client, auth_headers, test_conversation, mock_deepseek_interrupt_after_2,
 ):

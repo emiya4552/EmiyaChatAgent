@@ -201,6 +201,15 @@ async def process_chat(
     llm_top_p = chat_config.get("top_p")
     llm_frequency_penalty = chat_config.get("frequency_penalty")
     llm_presence_penalty = chat_config.get("presence_penalty")
+
+    # ADR-0005：tool-calling 更新通道（默认关；仅 uses_mvu 卡）。单次调用同时拿
+    # content + update_variables tool_call；tool_calls_acc 在流结束后被填充。
+    mvu_tools = None
+    tool_calls_acc: list = []
+    if settings.MVU_TOOL_UPDATE_ENABLED and final_state.get("persona_uses_mvu"):
+        from app.services.mvu_runtime.tools import build_update_variables_tool
+        mvu_tools = [build_update_variables_tool(final_state.get("wi_activated"))]
+
     try:
         async for token in call_deepseek_stream(
             messages=messages,
@@ -209,6 +218,8 @@ async def process_chat(
             top_p=llm_top_p,
             frequency_penalty=llm_frequency_penalty,
             presence_penalty=llm_presence_penalty,
+            tools=mvu_tools,
+            tool_calls_out=tool_calls_acc,
         ):
             buffer.append(token)
             yield f"event: message_delta\ndata: {json.dumps({'content': token}, ensure_ascii=False)}\n\n"
@@ -230,14 +241,19 @@ async def process_chat(
         yield f"event: error\ndata: {json.dumps(error_data, ensure_ascii=False)}\n\n"
         return
 
-    if not buffer:
+    final_state["assistant_reply"] = "".join(buffer)
+    final_state["mvu_tool_calls"] = tool_calls_acc
+
+    if not buffer and not tool_calls_acc:
         yield f"event: message_delta\ndata: {json.dumps({'content': '[没有收到回复]'}, ensure_ascii=False)}\n\n"
         yield f"event: message_done\ndata: {json.dumps({'message_id': '', 'conversation_id': str(conversation_id), 'new_memories': 0}, ensure_ascii=False)}\n\n"
         return
 
     # 5.5 尾部模板兜底：检测缺失模板，prefix continuation 强制续写
     final_state["assistant_reply"] = "".join(buffer)
-    if settings.WORLDBOOK_TAIL_CONTINUATION_ENABLED:
+    # ADR-0005：把本次 tool_call 交给 node_post_process 走同一校验+应用核心
+    final_state["mvu_tool_calls"] = tool_calls_acc
+    if buffer and settings.WORLDBOOK_TAIL_CONTINUATION_ENABLED:
         async for delta in _continuation_loop(
             final_state=final_state,
             messages=messages,
@@ -294,6 +310,8 @@ async def process_chat(
     msg_done_data["mvu_runtime_view"] = build_runtime_view(
         final_state.get("wi_activated"),
         scan_items=final_state.get("mvu_scan_items"),
+        update_diag=final_state.get("mvu_update_diag"),
+        update_channel=final_state.get("mvu_update_channel"),
     )
     yield f"event: message_done\ndata: {json.dumps(msg_done_data, ensure_ascii=False)}\n\n"
     await _broadcast(conversation_id, "message_done", msg_done_data)

@@ -43,6 +43,8 @@ def classify_mvu_comment(comment: str | None) -> str | None:
 def build_runtime_view(
     wi_activated: list[dict] | None,
     scan_items: list[dict] | None = None,
+    update_diag: dict | None = None,
+    update_channel: str | None = None,
 ) -> dict:
     """从本轮激活集派生 MVU 诊断视图。
 
@@ -51,14 +53,16 @@ def build_runtime_view(
             （含 comment / content / worldbook_id / worldbook_name 等）。
         scan_items: MVU 变量驱动扫描（ADR-0004）参与匹配的路径诊断
             [{path, found, value_preview}]；默认关闭时为空。
+        update_diag: ADR-0005 更新校验诊断 {applied, dropped, coerced, clamped}。
+        update_channel: 本轮实际生效的更新通道 tool/text/none。
 
     Returns:
         {
           "is_mvu": bool,
           "counts": {role: n},
-          "entries": [{role, role_label, comment, worldbook_id, worldbook_name,
-                       chars, injected_as_prompt}],
-          "scan_items": [{path, found, value_preview}],
+          "entries": [...],
+          "scan_items": [...],
+          "update": {"channel", "applied", "dropped", "coerced", "clamped"},
           "diagnostics": [str, ...],
         }
     """
@@ -104,10 +108,29 @@ def build_runtime_view(
             f"{len(hit)} 条有值渲染进扫描缓冲区。"
         )
 
+    update_diag = update_diag or {}
+    update = {
+        "channel": update_channel or "none",
+        "applied": update_diag.get("applied", 0),
+        "dropped": update_diag.get("dropped", []),
+        "coerced": update_diag.get("coerced", []),
+        "clamped": update_diag.get("clamped", []),
+    }
+    if update["applied"] or update["dropped"] or update["coerced"] or update["clamped"]:
+        parts = [f"更新通道={update['channel']}", f"应用 {update['applied']} 个 op（ADR-0005）"]
+        if update["coerced"]:
+            parts.append(f"强转 {len(update['coerced'])}")
+        if update["clamped"]:
+            parts.append(f"限幅 {len(update['clamped'])}")
+        if update["dropped"]:
+            parts.append(f"丢弃 {len(update['dropped'])}")
+        diagnostics.append("；".join(parts) + "。")
+
     return {
         "is_mvu": bool(entries) or bool(scan_items),
         "counts": counts,
         "entries": entries,
         "scan_items": scan_items,
+        "update": update,
         "diagnostics": diagnostics,
     }

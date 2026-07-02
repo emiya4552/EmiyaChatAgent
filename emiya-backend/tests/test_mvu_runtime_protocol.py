@@ -2,6 +2,7 @@ import json
 
 from app.services.ejs_engine import EJSEngine
 from app.services.message_pipeline import (
+    _apply_json_patch_ops,
     _apply_update_variable_to_scope,
     _parse_update_variable,
 )
@@ -413,3 +414,161 @@ def test_scan_worldbook_variable_driven_activation_via_extra_scan_text():
     activated = scan_worldbook([_book(entry)], history, {}, extra_scan_text="伶伶.当前情绪: 发情")
     assert len(activated) == 1
     assert activated[0].entry["uid"] == 1
+
+
+# ─── ADR-0005：更新校验核心 + 约束提取 ───
+
+from app.services.mvu_runtime import (  # noqa: E402
+    extract_constraints_from_entries,
+    validate_ops,
+)
+
+
+def test_validate_ops_rejects_readonly_underscore_paths():
+    stat = {"_storyState": {"idx": 0}, "好感度": 40}
+    ops = [
+        {"op": "replace", "path": "/_storyState/idx", "value": 9},
+        {"op": "replace", "path": "/好感度", "value": 45},
+    ]
+    accepted, diag = validate_ops(stat, ops)
+    assert [o["path"] for o in accepted] == ["/好感度"]
+    assert diag["dropped"][0]["reason"].startswith("只读")
+
+
+def test_validate_ops_coerces_to_current_value_type():
+    stat = {"存在创口": False, "好感度": 40}
+    ops = [
+        {"op": "replace", "path": "/存在创口", "value": "true"},
+        {"op": "replace", "path": "/好感度", "value": "45"},
+    ]
+    accepted, diag = validate_ops(stat, ops)
+    by = {o["path"]: o["value"] for o in accepted}
+    assert by["/存在创口"] is True
+    assert by["/好感度"] == 45
+    assert len(diag["coerced"]) == 2
+
+
+def test_validate_ops_clamps_range_and_drops_bad_enum():
+    stat = {"好感度": 40, "情绪": "平静"}
+    constraints = {
+        "好感度": {"type": "number", "min": 0, "max": 100},
+        "情绪": {"type": "string", "enum": ["开心", "平静", "发情"]},
+    }
+    ops = [
+        {"op": "replace", "path": "/好感度", "value": 250},
+        {"op": "replace", "path": "/情绪", "value": "暴躁"},
+    ]
+    accepted, diag = validate_ops(stat, ops, constraints)
+    assert {o["path"]: o["value"] for o in accepted} == {"/好感度": 100}
+    assert diag["clamped"][0]["to"] == 100
+    assert any("枚举" in d["reason"] for d in diag["dropped"])
+
+
+def test_validate_ops_rejects_readonly_source_paths_for_move():
+    stat = {"_storyState": {"idx": 1}, "score": 40}
+    ops = [{"op": "move", "from": "/_storyState/idx", "path": "/score"}]
+
+    accepted, diag = validate_ops(stat, ops)
+
+    assert accepted == []
+    assert diag["dropped"][0]["path"] == "/_storyState/idx"
+
+
+def test_delta_update_clamps_result_after_application():
+    stat = {"score": 40}
+    constraints = {"score": {"type": "number", "min": 0, "max": 100}}
+    diag = {"applied": 0, "dropped": [], "coerced": [], "clamped": []}
+
+    _apply_json_patch_ops(
+        stat,
+        [{"op": "delta", "path": "/score", "value": 100}],
+        constraints,
+        diag,
+    )
+
+    assert stat["score"] == 100
+    assert diag["clamped"][0]["path"] == "/score"
+    assert diag["clamped"][0]["to"] == 100
+
+
+def test_initvar_update_uses_validation_before_replace():
+    text = """
+<UpdateVariable>
+<initvar>
+score: "250"
+_storyState:
+  idx: 2
+</initvar>
+</UpdateVariable>
+"""
+    scope = {"local": {"stat_data": {"score": 40, "keep": "removed"}}}
+    constraints = {"score": {"type": "number", "min": 0, "max": 100}}
+    diag = {"applied": 0, "dropped": [], "coerced": [], "clamped": []}
+
+    updated = _apply_update_variable_to_scope(text, scope, constraints, diag)
+
+    assert updated["local"]["stat_data"] == {"score": 100}
+    assert diag["coerced"][0]["path"] == "/score"
+    assert diag["clamped"][0]["path"] == "/score"
+    assert diag["dropped"][0]["path"] == "/_storyState/idx"
+
+
+def test_extract_constraints_from_mvu_update_yaml():
+    content = """变量更新规则:
+  伶伶:
+    当前好感度:
+      type: number
+      range: 0~100
+    当前情绪:
+      type: string
+      check:
+        - 必须且只能从以下7个词汇中选择一个：开心、平静、伤心、发情、生气、害羞、诱惑
+"""
+    wi = [{"comment": "[mvu_update]变量更新规则", "content": content}]
+
+    c = extract_constraints_from_entries(wi)
+
+    assert c["伶伶.当前好感度"] == {"type": "number", "min": 0, "max": 100}
+    assert c["伶伶.当前情绪"]["enum"] == ["开心", "平静", "伤心", "发情", "生气", "害羞", "诱惑"]
+
+
+# ─── ADR-0005：tool 通道 + 流式累积 ───
+
+from app.services.mvu_runtime.tools import (  # noqa: E402
+    build_update_variables_tool,
+    extract_update_ops_from_tool_calls,
+)
+from app.services.llm_service import _accumulate_tool_call_deltas  # noqa: E402
+
+
+def test_build_update_variables_tool_uses_mvu_update_desc():
+    wi = [
+        {"comment": "[mvu_update]变量更新规则", "content": "好感度: 0~100"},
+        {"comment": "普通剧情", "content": "无关内容"},
+    ]
+    tool = build_update_variables_tool(wi)
+    assert tool["function"]["name"] == "update_variables"
+    assert "好感度: 0~100" in tool["function"]["description"]
+    assert "无关内容" not in tool["function"]["description"]
+    assert tool["function"]["parameters"]["properties"]["patch"]["type"] == "array"
+
+
+def test_extract_update_ops_from_tool_calls():
+    tool_calls = [
+        {"function": {"name": "update_variables",
+                      "arguments": '{"patch":[{"op":"replace","path":"/好感度","value":45}]}'}},
+        {"function": {"name": "other", "arguments": '{"x":1}'}},
+        {"function": {"name": "update_variables", "arguments": "not-json"}},
+    ]
+    ops = extract_update_ops_from_tool_calls(tool_calls)
+    assert ops == [{"op": "replace", "path": "/好感度", "value": 45}]
+
+
+def test_accumulate_tool_call_deltas_concatenates_arguments():
+    acc: dict = {}
+    _accumulate_tool_call_deltas(acc, [{"index": 0, "id": "call_1", "type": "function",
+                                        "function": {"name": "update_variables", "arguments": '{"pa'}}])
+    _accumulate_tool_call_deltas(acc, [{"index": 0, "function": {"arguments": 'tch":[]}'}}])
+    assert acc[0]["id"] == "call_1"
+    assert acc[0]["function"]["name"] == "update_variables"
+    assert acc[0]["function"]["arguments"] == '{"patch":[]}'

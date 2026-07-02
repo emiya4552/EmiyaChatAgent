@@ -1031,6 +1031,11 @@ async def node_post_process(state: ChatState) -> dict:
         processed_reply = state.get("assistant_reply") or ""
         display_reply = processed_reply
         scope_before = state.get("mvu_scope")
+        # ADR-0005：有界校验层的约束（来自本轮激活的 [mvu_update] 条目）+ 诊断收集
+        from app.services.mvu_runtime import extract_constraints_from_entries
+        mvu_constraints = extract_constraints_from_entries(state.get("wi_activated"))
+        update_diag = {"applied": 0, "dropped": [], "coerced": [], "clamped": []}
+        update_channel = "none"
         if processed_reply and conv_for_pipeline is not None:
             from app.services.message_pipeline import process_assistant_message_text
             processed_reply, display_reply, scope_after = await process_assistant_message_text(
@@ -1040,6 +1045,8 @@ async def node_post_process(state: ChatState) -> dict:
                 mvu_scope=scope_before,
                 macro_scope=None,
                 run_macro=False,
+                constraints=mvu_constraints,
+                update_diag=update_diag,
             )
             # 写回 state：assistant_reply=prompt 真相版，assistant_display=显示版
             # （chat_service 的 message_done 分别透出 final_content / final_display_content）
@@ -1047,6 +1054,28 @@ async def node_post_process(state: ChatState) -> dict:
             state["assistant_display"] = display_reply
             if scope_after is not None:
                 state["mvu_scope"] = scope_after
+            if update_diag["applied"] or update_diag["dropped"]:
+                update_channel = "text"
+
+        # ── ADR-0005：tool-calling 更新通道（与文本通道汇到同一校验+应用核心）──
+        tool_calls = state.get("mvu_tool_calls")
+        if tool_calls:
+            from app.services.mvu_runtime.tools import extract_update_ops_from_tool_calls
+            from app.services.message_pipeline import _apply_json_patch_ops
+            ops = extract_update_ops_from_tool_calls(tool_calls)
+            if ops:
+                scope_after = state.get("mvu_scope") or {"local": {}, "global": {}, "names": {}}
+                local_bucket = scope_after.setdefault("local", {})
+                stat_data = local_bucket.setdefault("stat_data", {})
+                if not isinstance(stat_data, dict):
+                    stat_data = {}
+                    local_bucket["stat_data"] = stat_data
+                _apply_json_patch_ops(stat_data, ops, mvu_constraints, update_diag)
+                state["mvu_scope"] = scope_after
+                update_channel = "tool"
+
+        state["mvu_update_diag"] = update_diag
+        state["mvu_update_channel"] = update_channel
 
         if processed_reply:
             import uuid as _uuid
