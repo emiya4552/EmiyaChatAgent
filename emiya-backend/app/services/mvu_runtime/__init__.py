@@ -23,6 +23,7 @@ from app.services.mvu_runtime.update_core import (
     validate_initvar_state,
     validate_ops,
 )
+from app.services.mvu_runtime.update_pass import run_update_pass
 
 __all__ = [
     "MVU_META_KEY",
@@ -35,6 +36,7 @@ __all__ = [
     "extract_constraints_from_entries",
     "merge_diag",
     "merge_initial_state_missing_only",
+    "run_update_pass",
     "validate_initvar_state",
     "validate_ops",
 ]

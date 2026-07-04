@@ -73,6 +73,47 @@ async def call_deepseek_non_stream(
         logger.error(f"DeepSeek API 请求失败: {e}")
         raise
 
+async def call_deepseek_tools_non_stream(
+    messages: list[dict],
+    tools: list[dict] | None = None,
+    tool_choice: str | dict = "auto",
+    model: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 1000,
+) -> tuple[str, list[dict]]:
+    """Call DeepSeek once and return both content and tool calls."""
+    url = f"{settings.DEEPSEEK_BASE_URL}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload: dict = {
+        "model": model or settings.DEEPSEEK_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = tool_choice
+
+    client = _get_llm_client()
+    try:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        message = data["choices"][0].get("message") or {}
+        return message.get("content") or "", list(message.get("tool_calls") or [])
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"DeepSeek API tool call returned error: {e.response.status_code}, {e.response.text}"
+        )
+        raise
+    except httpx.RequestError as e:
+        logger.error(f"DeepSeek API tool call request failed: {e}")
+        raise
+
 
 def _accumulate_tool_call_deltas(acc: dict, deltas: list) -> None:
     """把流式 delta.tool_calls 片段按 index 累积（OpenAI/DeepSeek 约定）。

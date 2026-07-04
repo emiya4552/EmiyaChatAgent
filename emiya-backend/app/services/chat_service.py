@@ -37,6 +37,26 @@ async def _broadcast(conversation_id: UUID, event_type: str, data: dict) -> None
 REPLY_LENGTH_MAX_TOKENS = {"short": 150, "medium": 500, "long": 2000}
 
 
+def _build_mvu_browser_sync(final_state: dict) -> dict | None:
+    """ADR-0008c 阶段1 down-channel：抓本回合层 1 的原料给前端 MVU Host。
+
+    仅当 `MVU_BROWSER_RUNTIME` 开 且 `persona_uses_mvu` 时返回 dict，否则 None。
+    **必须在 node_post_process 应用之前调用** —— base_stat 要的是应用前的 S(N-1)。
+    ops 来源无关：inline `<UpdateVariable>` 在 raw_reply 里，tool 通道在 tool_calls 里，
+    前端薄 Mvu 层（ADR-0008b）自己解析+应用+派生。base_stat 深拷贝，避免后续 apply 改到它。
+    """
+    if not (settings.MVU_BROWSER_RUNTIME and final_state.get("persona_uses_mvu")):
+        return None
+    import copy
+    base_local = (final_state.get("mvu_scope") or {}).get("local") or {}
+    return {
+        "base_stat": copy.deepcopy(base_local.get("stat_data") or {}),
+        "raw_reply": final_state.get("assistant_reply") or "",
+        "tool_calls": final_state.get("mvu_tool_calls") or [],
+        "double_ai_ops": final_state.get("mvu_double_ai_ops") or [],
+    }
+
+
 async def process_chat(
     db: AsyncSession,
     conversation_id: UUID,
@@ -110,6 +130,8 @@ async def process_chat(
         "error": None,
         "reply_length": reply_length,
         "mvu_scope": {},
+        "mvu_tool_calls": [],
+        "mvu_double_ai_ops": [],
         "enabled_blocks": enabled_blocks,
     }
 
@@ -204,7 +226,6 @@ async def process_chat(
 
     # ADR-0005：tool-calling 更新通道（默认关；仅 uses_mvu 卡）。单次调用同时拿
     # content + update_variables tool_call；tool_calls_acc 在流结束后被填充。
-    mvu_tools = None
     tool_calls_acc: list = []
     wi_activated_for_tool = final_state.get("wi_activated") or []
     mvu_update_entry_count = sum(
@@ -213,22 +234,19 @@ async def process_chat(
         if "[mvu_update]" in str((e or {}).get("comment") or "").lower()
     )
     mvu_tool_meta = {
-        "enabled_flag": bool(settings.MVU_TOOL_UPDATE_ENABLED),
+        "mode": "double_ai",
+        "enabled_flag": bool(final_state.get("persona_uses_mvu")),
         "persona_uses_mvu": bool(final_state.get("persona_uses_mvu")),
         "tools_sent": False,
         "tool_count": 0,
         "mvu_update_entries": mvu_update_entry_count,
         "tool_calls_received": 0,
         "tool_call_names": [],
+        "double_ai": None,
     }
-    if settings.MVU_TOOL_UPDATE_ENABLED and final_state.get("persona_uses_mvu"):
-        from app.services.mvu_runtime.tools import build_update_variables_tool
-        mvu_tools = [build_update_variables_tool(final_state.get("wi_activated"))]
-        mvu_tool_meta["tools_sent"] = True
-        mvu_tool_meta["tool_count"] = len(mvu_tools)
     final_state["mvu_tool_meta"] = mvu_tool_meta
     logger.info(
-        "[MVU-ADR5] tool gate conv=%s enabled=%s persona_uses_mvu=%s "
+        "[MVU-DOUBLE-AI] gate conv=%s enabled=%s persona_uses_mvu=%s "
         "tools_sent=%s tool_count=%s mvu_update_entries=%s",
         conversation_id,
         mvu_tool_meta["enabled_flag"],
@@ -246,8 +264,6 @@ async def process_chat(
             top_p=llm_top_p,
             frequency_penalty=llm_frequency_penalty,
             presence_penalty=llm_presence_penalty,
-            tools=mvu_tools,
-            tool_calls_out=tool_calls_acc,
         ):
             buffer.append(token)
             yield f"event: message_delta\ndata: {json.dumps({'content': token}, ensure_ascii=False)}\n\n"
@@ -307,10 +323,45 @@ async def process_chat(
             yield delta
 
     # 6. 保存回复 + 后处理（情绪记录、关系更新、记忆提取）
+    if final_state.get("persona_uses_mvu") and (final_state.get("assistant_reply") or "").strip():
+        try:
+            from app.services.mvu_runtime import run_update_pass
+
+            scope = final_state.get("mvu_scope") or {}
+            local_bucket = scope.get("local") or {}
+            stat_data = local_bucket.get("stat_data") or {}
+            ops, double_ai_meta = await run_update_pass(
+                reply=final_state.get("assistant_reply") or "",
+                wi_activated=final_state.get("wi_activated"),
+                stat_data=stat_data if isinstance(stat_data, dict) else {},
+            )
+            final_state["mvu_double_ai_ops"] = ops
+            mvu_tool_meta["double_ai"] = double_ai_meta
+            mvu_tool_meta["tool_calls_received"] = int(double_ai_meta.get("tool_calls") or 0)
+            mvu_tool_meta["tool_call_names"] = (
+                ["update_variables"] if mvu_tool_meta["tool_calls_received"] else []
+            )
+            final_state["mvu_tool_meta"] = mvu_tool_meta
+            logger.info(
+                "[MVU-DOUBLE-AI] pass done conv=%s ops=%s tool_calls=%s fallback=%s error=%s",
+                conversation_id,
+                double_ai_meta.get("ops"),
+                double_ai_meta.get("tool_calls"),
+                double_ai_meta.get("fallback"),
+                double_ai_meta.get("error"),
+            )
+        except Exception:
+            logger.exception("[MVU-DOUBLE-AI] update pass crashed")
+            final_state["mvu_double_ai_ops"] = []
+
     logger.info(f"LLM 原始回复 (conv={conversation_id}):\n{final_state['assistant_reply']}")
     logger.debug(f"即将调用 node_post_process, conv_id={conversation_id}, "
                 f"reply_len={len(final_state['assistant_reply'])}, "
                 f"state_keys={sorted(final_state.keys())}")
+    # ADR-0008c 阶段1：MVU 浏览器运行时 down-channel。必须在 node_post_process 应用
+    # **之前**抓，base_stat 才是 S(N-1)。off 时返回 None，完全不产生该字段。
+    mvu_browser_sync = _build_mvu_browser_sync(final_state)
+
     post_result: dict = {}
     try:
         post_result = await node_post_process(final_state)
@@ -358,6 +409,9 @@ async def process_chat(
         update_channel=final_state.get("mvu_update_channel"),
         update_meta=final_state.get("mvu_tool_meta"),
     )
+    # ADR-0008c 阶段1：附加 down-channel（仅 MVU_BROWSER_RUNTIME on 时存在）
+    if mvu_browser_sync is not None:
+        msg_done_data["mvu_browser_sync"] = mvu_browser_sync
     yield f"event: message_done\ndata: {json.dumps(msg_done_data, ensure_ascii=False)}\n\n"
     await _broadcast(conversation_id, "message_done", msg_done_data)
 

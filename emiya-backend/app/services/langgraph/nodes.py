@@ -690,10 +690,8 @@ async def node_build_prompt(state: ChatState) -> dict:
         # （state["wi_activated"] 不动，工具描述/诊断仍拿全量），并追加一句"用工具"引导。
         # 注意：`persona_uses_mvu` 要到本节点 return 时才写进 state，这里 state.get 拿不到；
         # 直接读本节点已加载的 persona 对象（见上文 persona = ... 处）。
-        tool_update_mode = bool(
-            settings.MVU_TOOL_UPDATE_ENABLED and persona and getattr(persona, "uses_mvu", False)
-        )
-        if tool_update_mode and wi_activated:
+        mvu_update_divert_mode = bool(persona and getattr(persona, "uses_mvu", False))
+        if mvu_update_divert_mode and wi_activated:
             from app.services.mvu_runtime.runtime_view import classify_mvu_comment
             wi_activated = [
                 e for e in wi_activated
@@ -762,8 +760,8 @@ async def node_build_prompt(state: ChatState) -> dict:
                 logger.info(f"[尾部模板兜底] 注入约束：{templates}")
 
         # ── ADR-0006：tool 模式引导，替代被摘掉的 [mvu_update] 文本指令 ──
-        if tool_update_mode:
-            rendered.append({"role": "system", "content": _MVU_TOOL_DIRECTIVE})
+        if mvu_update_divert_mode:
+            rendered.append({"role": "system", "content": _MVU_DOUBLE_AI_DIRECTIVE})
 
         # squash 策略：仅在有预设时合并连续 system 消息。
         # 理由：预设 position=0/1 注入会产生多块紧邻的 system，合并为单条以满足
@@ -824,6 +822,15 @@ _MVU_TOOL_DIRECTIVE = (
     "提交一组 JSON Patch 变更；**不要**在回复正文里输出 <UpdateVariable> / <JSONPatch> "
     "文本块。若本轮无任何变化，可以不调用该工具。变量字段、取值范围与更新规则见 "
     "update_variables 工具说明。"
+)
+
+
+_MVU_DOUBLE_AI_DIRECTIVE = (
+    "[MVU state update - double-ai mode]\n"
+    "Write only the visible narrative reply. Do not output <UpdateVariable>, "
+    "<JSONPatch>, or any hidden state-update block in the reply body. If the "
+    "scene changes character state, the system will run a separate update pass "
+    "after your reply."
 )
 
 
@@ -1074,6 +1081,7 @@ async def node_post_process(state: ChatState) -> dict:
                 mvu_scope=scope_before,
                 macro_scope=None,
                 run_macro=False,
+                apply_update_variable=False,
                 constraints=mvu_constraints,
                 update_diag=update_diag,
             )
@@ -1102,6 +1110,19 @@ async def node_post_process(state: ChatState) -> dict:
                 _apply_json_patch_ops(stat_data, ops, mvu_constraints, update_diag)
                 state["mvu_scope"] = scope_after
                 update_channel = "tool"
+
+        double_ai_ops = state.get("mvu_double_ai_ops")
+        if double_ai_ops:
+            from app.services.message_pipeline import _apply_json_patch_ops
+            scope_after = state.get("mvu_scope") or {"local": {}, "global": {}, "names": {}}
+            local_bucket = scope_after.setdefault("local", {})
+            stat_data = local_bucket.setdefault("stat_data", {})
+            if not isinstance(stat_data, dict):
+                stat_data = {}
+                local_bucket["stat_data"] = stat_data
+            _apply_json_patch_ops(stat_data, double_ai_ops, mvu_constraints, update_diag)
+            state["mvu_scope"] = scope_after
+            update_channel = "double_ai"
 
         state["mvu_update_diag"] = update_diag
         state["mvu_update_channel"] = update_channel

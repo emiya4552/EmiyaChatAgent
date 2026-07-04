@@ -475,6 +475,36 @@ async def clear_conversation_variables(
     return await _conv_to_response_with_derived(conv, db)
 
 
+class MvuStateUpdate(BaseModel):
+    """ADR-0008c UP 通道请求体：前端 MVU Host 结算后的 stat_data。"""
+    stat_data: dict = Field(default_factory=dict)
+
+
+@router.put("/{conversation_id}/mvu-state", response_model=ConversationResponse)
+async def update_conversation_mvu_state(
+    conversation_id: UUID,
+    request: MvuStateUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """ADR-0008c UP 通道：前端 MVU Host 结算后的 `stat_data` 回传持久化。
+
+    浏览器算出的 stat_data 含 `calculateStoryLogic` 派生字段（后端 Python apply 算不出），
+    比后端版更全，**覆盖式**写入 `conv.variables.stat_data`。client 对自己会话为权威。
+    浏览器缺席时后端仍有自己 apply 的版本兜底（阶段2b，后端 apply 尚未退役）。
+    """
+    conv = await get_conversation_by_id(db, conversation_id, current_user.id)
+    if conv is None:
+        raise NotFoundException("对话不存在")
+    local = dict(conv.variables or {})
+    local["stat_data"] = request.stat_data or {}
+    conv.variables = local
+    db.add(conv)
+    await db.commit()
+    conv = await get_conversation_by_id(db, conversation_id, current_user.id)
+    return await _conv_to_response_with_derived(conv, db)
+
+
 @router.post("/{conversation_id}/variables/reload-mvu-initial-state", response_model=ConversationResponse)
 async def reload_mvu_initial_state(
     conversation_id: UUID,
