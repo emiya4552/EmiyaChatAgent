@@ -352,6 +352,7 @@ async def process_assistant_message_text(
     mvu_scope: dict | None = None,
     macro_scope: dict | None = None,
     run_macro: bool = True,
+    apply_update_variable: bool = True,
     constraints: dict | None = None,
     update_diag: dict | None = None,
 ) -> tuple[str, str, dict | None]:
@@ -394,9 +395,10 @@ async def process_assistant_message_text(
 
     # 2) MVU state extraction must run before display/reply regex rewrites can
     # mutate or remove the machine-readable `<UpdateVariable>` block.
-    mvu_scope = _apply_update_variable_to_scope(
-        precursor, mvu_scope, constraints, update_diag
-    )
+    if apply_update_variable:
+        mvu_scope = _apply_update_variable_to_scope(
+            precursor, mvu_scope, constraints, update_diag
+        )
 
     # 3) reply 阶段正则，按视图分两批跑（ADR-0003 双管线）。macro_scope 透传给
     #    RegexProcessor，让 substituteRegex 字段下的 findRegex/replaceString 也能

@@ -561,6 +561,7 @@ from app.services.mvu_runtime.tools import (  # noqa: E402
     extract_update_ops_from_tool_calls,
 )
 from app.services.llm_service import _accumulate_tool_call_deltas  # noqa: E402
+from app.services.mvu_runtime import run_update_pass  # noqa: E402
 
 
 def test_build_update_variables_tool_uses_mvu_update_desc():
@@ -594,6 +595,80 @@ def test_accumulate_tool_call_deltas_concatenates_arguments():
     assert acc[0]["id"] == "call_1"
     assert acc[0]["function"]["name"] == "update_variables"
     assert acc[0]["function"]["arguments"] == '{"patch":[]}'
+
+
+async def test_run_update_pass_extracts_forced_tool_ops(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "MVU_UPDATE_FORCE_TOOL", True)
+
+    async def _fake_call(**kwargs):
+        assert kwargs["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "update_variables"},
+        }
+        return "", [
+            {
+                "function": {
+                    "name": "update_variables",
+                    "arguments": json.dumps({
+                        "patch": [{"op": "replace", "path": "/score", "value": 45}]
+                    }),
+                }
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.services.mvu_runtime.update_pass.call_deepseek_tools_non_stream",
+        _fake_call,
+    )
+
+    ops, meta = await run_update_pass(
+        reply="She smiles.",
+        wi_activated=[{"comment": "[mvu_update] rules", "content": "score: 0~100"}],
+        stat_data={"score": 40},
+    )
+
+    assert ops == [{"op": "replace", "path": "/score", "value": 45}]
+    assert meta["mode"] == "double_ai"
+    assert meta["tool_calls"] == 1
+    assert meta["ops"] == 1
+
+
+async def test_run_update_pass_text_fallback(monkeypatch):
+    async def _fake_call(**kwargs):
+        return '{"patch":[{"op":"delta","path":"/score","value":1}]}', []
+
+    monkeypatch.setattr(
+        "app.services.mvu_runtime.update_pass.call_deepseek_tools_non_stream",
+        _fake_call,
+    )
+
+    ops, meta = await run_update_pass(
+        reply="She warms up.",
+        wi_activated=[],
+        stat_data={"score": 40},
+    )
+
+    assert ops == [{"op": "delta", "path": "/score", "value": 1}]
+    assert meta["fallback"] == "text"
+    assert meta["ops"] == 1
+
+
+async def test_run_update_pass_empty_reply_is_noop(monkeypatch):
+    async def _fail_call(**kwargs):
+        raise AssertionError("should not call LLM for empty replies")
+
+    monkeypatch.setattr(
+        "app.services.mvu_runtime.update_pass.call_deepseek_tools_non_stream",
+        _fail_call,
+    )
+
+    ops, meta = await run_update_pass(reply="   ", wi_activated=[], stat_data={})
+
+    assert ops == []
+    assert meta["mode"] == "double_ai"
+    assert meta["ops"] == 0
 
 
 # ─── ADR-0006：宽容解析裸 JSONPatch 数组 + tool 引导 ───

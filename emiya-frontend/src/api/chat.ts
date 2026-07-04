@@ -1,5 +1,5 @@
 import api from './index'
-import type { EmotionResult, Message, WorldInfoActivated } from '../types'
+import type { EmotionResult, Message, MvuBrowserSync, WorldInfoActivated } from '../types'
 
 // 获取对话消息（分页，按时间倒序）
 export async function fetchMessages(conversationId: string, limit = 200, offset = 0): Promise<Message[]> {
@@ -16,7 +16,7 @@ export function sendMessage(
   replyLength: string,
   callbacks: {
     onToken: (token: string) => void
-    onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number; variables?: Record<string, unknown>; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown }) => void
+    onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number; variables?: Record<string, unknown>; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync }) => void
     onError: (error: string, partialMessageId?: string) => void
     onEmotion?: (emotion: EmotionResult) => void
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
@@ -114,7 +114,7 @@ export function watchLive(
   signal: AbortSignal,
   callbacks: {
     onToken: (token: string) => void
-    onDone: (data: { message_id: string; conversation_id: string; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown }) => void
+    onDone: (data: { message_id: string; conversation_id: string; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync }) => void
     onEmotion?: (emotion: EmotionResult) => void
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
     onError: () => void

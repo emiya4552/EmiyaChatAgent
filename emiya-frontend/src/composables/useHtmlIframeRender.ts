@@ -55,6 +55,40 @@ body { background: transparent; }
 </style>
 `
 
+// ── ADR-0008d：MVU 卡显示 HTML（状态栏/开场面板）的只读运行环境 ──
+// 卡的 markdownOnly 状态栏 HTML 用 $ / getVariables / Mvu 读实时状态来画状态栏，
+// 但空 srcdoc 里没这些 → `$ is not defined`。这里给它注入 jQuery + 只读 shim（读当前
+// stat_data，静态渲染当前态；不做 live 更新/写回，那是 MVU Host 的活）。仅对**用到**这些
+// API 的 HTML 注入（gated），不影响普通 LLM HTML 代码块。
+const _MVU_JQUERY_SRC = 'https://testingcf.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js'
+let _mvuStatData: Record<string, any> = {}
+
+/** chat store 在变量更新（后端 data.variables 或浏览器 Host 结算）后调，喂给状态栏 HTML 显示。*/
+export function setMvuStatData(d: Record<string, any> | null | undefined): void {
+  _mvuStatData = d || {}
+}
+
+function _needsMvuEnv(html: string): boolean {
+  return /getVariables|\bMvu\b|\$\(|jQuery|TavernHelper/.test(html)
+}
+
+function _mvuEnvScript(): string {
+  const json = JSON.stringify(_mvuStatData || {})
+  return (
+    `<script src="${_MVU_JQUERY_SRC}"></script>\n` +
+    '<script>(function(){' +
+    `var S=${json};` +
+    'function gv(){return {stat_data:S};}' +
+    'window.getVariables=gv;' +
+    'window.Mvu={getMvuData:function(){return {stat_data:S};},replaceMvuData:function(){},events:{VARIABLE_UPDATE_ENDED:"_",VARIABLE_UPDATE_STARTED:"_"}};' +
+    'window.eventOn=function(){};window.eventMakeLast=function(){};window.eventRemoveListener=function(){};' +
+    'window.substitudeMacros=function(s){return s;};window.getLastMessageId=function(){return 0;};' +
+    'window.TavernHelper={getVariables:gv,getWorldbook:function(){return [];}};' +
+    'window.waitGlobalInitialized=function(){return Promise.resolve();};' +
+    '})();</script>'
+  )
+}
+
 function _base64ToUtf8(b64: string): string {
   try {
     return decodeURIComponent(escape(atob(b64)))
@@ -70,25 +104,29 @@ function _base64ToUtf8(b64: string): string {
 function _buildSrcdoc(userHtml: string): string {
   // 如果 LLM 已经给了完整 <!DOCTYPE><html>...</html>，在 <head> 里追加我们的脚本与样式；
   // 否则包装一层完整文档。
+  // MVU 环境放最前（jQuery 先加载，卡脚本才有 $）；样式/高度脚本次之
+  const mvuEnv = _needsMvuEnv(userHtml) ? _mvuEnvScript() : ''
+  const head = `${mvuEnv}${BASE_STYLE}${HEIGHT_SCRIPT}`
   const isFullDoc = /<html[\s>]/i.test(userHtml) || /<!DOCTYPE/i.test(userHtml)
   if (isFullDoc) {
-    // 在 </head> 之前注入；如果没有 <head>，在 <html> 之后注入
-    if (/<\/head>/i.test(userHtml)) {
-      return userHtml.replace(/<\/head>/i, `${BASE_STYLE}${HEIGHT_SCRIPT}</head>`)
+    // 优先注入到 <head> 起始（保证 jQuery 在卡脚本前）；没有 <head> 再兜底。
+    // 注意：正则须只匹配 <head> 标签本身（`<head\b[^>]*>`），不能用贪婪的
+    // `<head[\s>][^>]*>` —— 后者会吃到 `<head>\n<style>` 把 jQuery 注进 <style> 里当 CSS。
+    if (/<head\b[^>]*>/i.test(userHtml)) {
+      return userHtml.replace(/<head\b[^>]*>/i, (m) => `${m}${head}`)
     }
-    if (/<head[\s>]/i.test(userHtml)) {
-      return userHtml.replace(/<head[\s>][^>]*>/i, (m) => `${m}${BASE_STYLE}${HEIGHT_SCRIPT}`)
+    if (/<\/head>/i.test(userHtml)) {
+      return userHtml.replace(/<\/head>/i, `${head}</head>`)
     }
     // 极端：有 <html> 没 <head>
-    return userHtml.replace(/<html[^>]*>/i, (m) => `${m}<head>${BASE_STYLE}${HEIGHT_SCRIPT}</head>`)
+    return userHtml.replace(/<html[^>]*>/i, (m) => `${m}<head>${head}</head>`)
   }
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-${BASE_STYLE}
-${HEIGHT_SCRIPT}
+${head}
 </head>
 <body>${userHtml}</body>
 </html>`

@@ -95,21 +95,26 @@ async def test_no_duplicate_message_done(
 # ─── B5: 中断路径 error 带 partial_message_id ─────────────────────
 
 
-async def test_tool_only_mvu_update_is_applied_without_content(
+async def test_double_ai_mvu_update_is_applied_after_narrative(
     client, auth_headers, test_conversation, mock_deepseek_normal, monkeypatch,
 ):
-    from app.config import settings
     from app.models.conversation import Conversation
     from app.models.persona import Persona
     from app.models.worldbook import Worldbook
 
-    monkeypatch.setattr(settings, "MVU_TOOL_UPDATE_ENABLED", True)
+    async def _emit_narrative(*args, **kwargs):
+        assert kwargs.get("tools") is None
+        yield "score changes"
 
-    async def _emit_tool_only(*args, **kwargs):
+    monkeypatch.setattr(
+        "app.services.chat_service.call_deepseek_stream",
+        _emit_narrative,
+    )
+
+    async def _emit_update_ops(*args, **kwargs):
         assert kwargs.get("tools")
-        tool_calls_out = kwargs.get("tool_calls_out")
-        if tool_calls_out is not None:
-            tool_calls_out.append({
+        return "", [
+            {
                 "id": "call_1",
                 "type": "function",
                 "function": {
@@ -120,13 +125,12 @@ async def test_tool_only_mvu_update_is_applied_without_content(
                         ]
                     }),
                 },
-            })
-        if False:
-            yield ""
+            }
+        ]
 
     monkeypatch.setattr(
-        "app.services.chat_service.call_deepseek_stream",
-        _emit_tool_only,
+        "app.services.mvu_runtime.update_pass.call_deepseek_tools_non_stream",
+        _emit_update_ops,
     )
 
     async with AsyncSessionLocal() as session:
@@ -175,13 +179,15 @@ async def test_tool_only_mvu_update_is_applied_without_content(
 
     done = done_events[0]["data"]
     assert done["variables"]["stat_data"]["score"] == 100
-    assert done["mvu_runtime_view"]["update"]["channel"] == "tool"
+    assert done["mvu_runtime_view"]["update"]["channel"] == "double_ai"
     assert done["mvu_runtime_view"]["update"]["applied"] == 1
     assert done["mvu_runtime_view"]["update"]["clamped"][0]["path"] == "/score"
     assert done["mvu_runtime_view"]["update"]["meta"]["enabled_flag"] is True
-    assert done["mvu_runtime_view"]["update"]["meta"]["tools_sent"] is True
+    assert done["mvu_runtime_view"]["update"]["meta"]["mode"] == "double_ai"
+    assert done["mvu_runtime_view"]["update"]["meta"]["tools_sent"] is False
     assert done["mvu_runtime_view"]["update"]["meta"]["tool_calls_received"] == 1
     assert done["mvu_runtime_view"]["update"]["meta"]["tool_call_names"] == ["update_variables"]
+    assert done["mvu_runtime_view"]["update"]["meta"]["double_ai"]["ops"] == 1
 
     async with AsyncSessionLocal() as session:
         conv = await session.get(Conversation, test_conversation.id)

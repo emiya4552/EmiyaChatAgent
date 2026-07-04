@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <!--
+    MVU Host iframe 页（ADR-0008b/c）。作为 <iframe src="/mvu-host.html" sandbox="allow-scripts">
+    的内容跑在不透明源沙箱里，装薄 Mvu 层 + 卡脚本，用 postMessage 与父窗口通信。
+    需在 vite.config 的 build.rollupOptions.input 里把本文件加为额外入口。
+    TODO(0008b)：加 CSP <meta http-equiv> 锁 script-src/connect-src 到自托 Vendored Stack。
+  -->
+  <title>MVU Host</title>
+</head>
+<body>
+  <script type="module" src="/src/mvu/mvu-host-entry.mjs"></script>
+</body>
+</html>

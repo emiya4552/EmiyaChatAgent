@@ -99,3 +99,9 @@ export async function reloadMvuInitialState(convId: string): Promise<Conversatio
   const res = await api.post(`/v1/conversations/${convId}/variables/reload-mvu-initial-state`)
   return res.data
 }
+
+// PUT /v1/conversations/{id}/mvu-state — ADR-0008c UP 通道：浏览器 MVU Host 结算的 stat_data 回传持久化
+export async function updateMvuState(convId: string, statData: Record<string, any>): Promise<Conversation> {
+  const res = await api.put(`/v1/conversations/${convId}/mvu-state`, { stat_data: statData })
+  return res.data
+}

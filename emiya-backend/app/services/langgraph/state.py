@@ -37,6 +37,7 @@ class ChatState(TypedDict):
     # MVU 更新通道（ADR-0005）：本次 LLM 累积的 tool_calls（chat_service 填），
     # 以及 post_process 产出的校验诊断与实际生效通道（供 mvu_runtime_view）
     mvu_tool_calls: list[dict]
+    mvu_double_ai_ops: list[dict]
     mvu_update_diag: dict
     mvu_update_channel: str
 

@@ -413,6 +413,16 @@ export interface MvuRuntimeView {
   diagnostics: string[]
 }
 
+// MVU 浏览器运行时 down-channel（ADR-0008c 阶段1）：message_done 在
+// settings.MVU_BROWSER_RUNTIME 开时附带的一回合原料，喂给前端 MVU Host（薄 Mvu 层）
+// 自己解析+应用+派生。off 时该字段不存在。
+export interface MvuBrowserSync {
+  base_stat: Record<string, any> // 应用前的 stat_data = S(N-1)
+  raw_reply: string // 原始回复，含 inline <UpdateVariable>
+  tool_calls: any[] // tool 通道的 update_variables 调用
+  double_ai_ops?: any[] // double-ai 通道的 JSON Patch ops
+}
+
 // ─── 正则预设 ───
 
 export interface RegexScript {
