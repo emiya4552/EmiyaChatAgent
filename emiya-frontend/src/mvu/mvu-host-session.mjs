@@ -11,21 +11,25 @@ import { createIframeHost } from './mvu-host-controller.mjs'
 import { extractMvuScripts } from './card-scripts.mjs'
 
 export class MvuHostSession {
-  constructor({ hostUrl = '/mvu-host.html', hostFactory = createIframeHost } = {}) {
+  constructor({ hostUrl = '/mvu-host.html', hostFactory = createIframeHost, includeUi = false, capabilityHandler } = {}) {
     this._hostUrl = hostUrl
     this._hostFactory = hostFactory
+    this._includeUi = includeUi // ADR-0008d：true 时也载 UI 脚本（浮动面板/手机终端）
+    this._capabilityHandler = capabilityHandler // ADR-0008d：卡能力请求裁决（缺省全拒）
     this._host = null // { controller, iframe }
     this._loaded = false
   }
 
   get loaded() { return this._loaded }
+  get iframe() { return this._host ? this._host.iframe : null }
 
-  /** 建 iframe + 载卡的 schema/logic/data 脚本。cardData = persona.card_data（原始卡）。
-   * 卡没有可跑的 MVU 状态脚本时返回 {ok:false}，不建 iframe。 */
+  /** 建 iframe + 载卡脚本。cardData = persona.card_data（原始卡）。
+   * 状态阶段只载 schema/logic/data；`includeUi` 时也载 UI 脚本（0008d）。
+   * 卡没有可跑脚本时返回 {ok:false}，不建 iframe。 */
   async init(cardData) {
-    const { scripts, skipped } = extractMvuScripts(cardData)
-    if (!scripts.length) return { ok: false, reason: 'no MVU state scripts', skipped }
-    this._host = this._hostFactory(this._hostUrl)
+    const { scripts, skipped } = extractMvuScripts(cardData, { includeUi: this._includeUi })
+    if (!scripts.length) return { ok: false, reason: 'no MVU scripts', skipped }
+    this._host = this._hostFactory(this._hostUrl, { capabilityHandler: this._capabilityHandler })
     await this._host.controller.ready()
     await this._host.controller.loadCard(scripts)
     this._loaded = true

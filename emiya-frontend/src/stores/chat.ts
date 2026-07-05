@@ -26,31 +26,54 @@ export const useChatStore = defineStore('chat', () => {
   let _currentPage = 0
   const _pageSize = 200
 
-  // ── ADR-0008c 阶段2：浏览器 MVU Host 会话（懒创建，见 src/mvu/README.md）──
+  // ── ADR-0008c 阶段2：浏览器 MVU Host 会话（懒创建 + 预热，见 src/mvu/README.md）──
   let mvuSession: any = null
   let mvuSessionConvId: string | null = null
+  let mvuInitPromise: Promise<any> | null = null // 建 Host 的在途 promise：并发/重复触发共享同一次构建，避免竞态重建 + 双份 CDN 加载
+  let mvuLastTurnKey: string | null = null        // 已处理的 message_done 去重键（两个 onDone 路径会各触发一次同一回合）
   function disposeMvuSession() {
     if (mvuSession) { try { mvuSession.dispose() } catch { /* ignore */ } mvuSession = null }
     mvuSessionConvId = null
+    mvuInitPromise = null
   }
-  // 收到 message_done.mvu_browser_sync：懒建/复用 Host → applyTurn → 用浏览器结算的
+
+  // 确保当前对话的 Host 会话就绪。并发/重复调用共享同一 in-flight 构建（去掉双 onDone 造成的双份建 iframe +
+  // 双份 jsdelivr CDN 加载的竞态）。非 MVU 卡（无可跑脚本）返回 null 且不建 iframe。
+  function ensureMvuSession(conversationId: string): Promise<any> {
+    if (mvuSession && mvuSessionConvId === conversationId) return Promise.resolve(mvuSession)
+    if (mvuInitPromise && mvuSessionConvId === conversationId) return mvuInitPromise
+    if (mvuSessionConvId && mvuSessionConvId !== conversationId) disposeMvuSession()
+    mvuSessionConvId = conversationId
+    const p: Promise<any> = (async () => {
+      const conv = useConversationStore().list.find((c) => c.id === conversationId) as any
+      const personaId = conv?.persona_id
+      if (!personaId) return null
+      const detail = await fetchPersonaDetail(personaId) as any
+      const sess = new MvuHostSession()
+      const r = await sess.init(detail?.card_data)
+      if (!r?.ok) { sess.dispose(); return null }
+      mvuSession = sess
+      return sess
+    })().catch((e) => { console.warn('[MVU] Host 会话构建失败:', e); return null })
+    mvuInitPromise = p
+    // 失败（resolve null）时，若仍是当前 in-flight，清掉以允许下一回合重试（成功则 mvuSession 已 set）
+    void p.then((s) => { if (!s && mvuInitPromise === p) mvuInitPromise = null })
+    return p
+  }
+
+  // 收到 message_done.mvu_browser_sync：确保 Host 就绪 → applyTurn → 用浏览器结算的
   // stat_data 覆盖对话状态变量展示（替代后端 data.variables）。全程 try/catch，失败不影响聊天。
-  async function handleMvuBrowserSync(conversationId: string, sync: any) {
+  // turnKey（message_id）去重：主 SSE 路径与 live 广播路径会各触发一次同一回合，只处理一次。
+  async function handleMvuBrowserSync(conversationId: string, sync: any, turnKey?: string) {
+    if (turnKey) {
+      if (turnKey === mvuLastTurnKey) return // 同一回合已处理（去重发生在任何 await 之前，天然原子）
+      mvuLastTurnKey = turnKey
+    }
     const convStore = useConversationStore()
     try {
-      if (!mvuSession || mvuSessionConvId !== conversationId) {
-        disposeMvuSession()
-        const conv = convStore.list.find((c) => c.id === conversationId) as any
-        const personaId = conv?.persona_id
-        if (!personaId) return
-        const detail = await fetchPersonaDetail(personaId) as any
-        const sess = new MvuHostSession()
-        const r = await sess.init(detail?.card_data)
-        if (!r?.ok) { sess.dispose(); return }
-        mvuSession = sess
-        mvuSessionConvId = conversationId
-      }
-      const { stat_data } = await mvuSession.applyTurn(sync)
+      const sess = await ensureMvuSession(conversationId)
+      if (!sess) return
+      const { stat_data } = await sess.applyTurn(sync)
       const idx = convStore.list.findIndex((c) => c.id === conversationId)
       if (idx !== -1) {
         const prev = (convStore.list[idx] as any).variables || {}
@@ -72,11 +95,16 @@ export const useChatStore = defineStore('chat', () => {
     mvuRuntimeView.value = null
     // 切换对话：卸掉上一对话的 MVU Host iframe（下条 mvu_browser_sync 会按需重建）
     disposeMvuSession()
+    mvuLastTurnKey = null // 换对话：清回合去重键
     // 开会话：把当前对话已持久化的 stat_data 喂给状态栏 HTML 环境（老消息/开场白也能显示）
     {
       const conv = useConversationStore().list.find((c) => c.id === conversationId) as any
       setMvuStatData(conv?.variables?.stat_data || {})
     }
+    // 预热：开会话时就后台构建 Host（拉 jsdelivr CDN 依赖 ~数秒），把首回合的构建成本挪到"读历史/打字"
+    // 阶段，等用户发消息拿到 mvu_browser_sync 时 applyTurn 已可瞬时结算。非 MVU 卡不建 iframe（init 返回
+    // ok:false）。best-effort，失败不影响聊天。
+    void ensureMvuSession(conversationId)
     const msgs = await chatApi.fetchMessages(conversationId, _pageSize, 0)
     // 后端按时间倒序，前端需要正序展示
     messages.value = msgs.reverse()
@@ -168,7 +196,7 @@ export const useChatStore = defineStore('chat', () => {
         }
         // ADR-0008c 阶段2：后端开了 MVU_BROWSER_RUNTIME 时，用浏览器 MVU Host 结算状态（覆盖上面的 variables）
         if (data?.mvu_browser_sync) {
-          void handleMvuBrowserSync(conversationId, data.mvu_browser_sync)
+          void handleMvuBrowserSync(conversationId, data.mvu_browser_sync, data.message_id)
         }
       },
       onError(err, partialMessageId) {
@@ -272,7 +300,7 @@ export const useChatStore = defineStore('chat', () => {
         }
         // ADR-0008c 阶段2：浏览器 MVU Host 结算（同 sendMessage 路径）
         if (data?.mvu_browser_sync) {
-          void handleMvuBrowserSync(conversationId, data.mvu_browser_sync)
+          void handleMvuBrowserSync(conversationId, data.mvu_browser_sync, data.message_id)
         }
         liveAiMsgId = null
       },

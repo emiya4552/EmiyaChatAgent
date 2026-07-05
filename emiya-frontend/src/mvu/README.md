@@ -37,8 +37,11 @@ Host→父:  {__mvu:1, type:'ready'}
 
 ## 已就位（阶段 2b 大部分）
 
-- **Host 页**：`emiya-frontend/mvu-host.html` + `mvu-host-entry.mjs`（跑 `bootMvuHost()`）；
-  `vite.config.ts` 已加为多入口。iframe `src="/mvu-host.html" sandbox="allow-scripts"`。
+- **Host bundle（ADR-0008b 修订）**：`mvu-host-entry.mjs`（跑 `bootMvuHost()`）由 `vite.config.ts`
+  的 `mvuHostBundlePlugin` 用 esbuild 打成**单文件自包含 IIFE**，经虚拟模块 `virtual:mvu-host-bundle`
+  暴露源码字符串；`createIframeHost` 用 **`srcdoc` 内联注入** `sandbox="allow-scripts"` 的 iframe。
+  不再用 `<iframe src="/mvu-host.html">`——opaque 源按 CORS fetch 同源 module 脚本会被拦（Host 从未
+  boot）；内联脚本无 fetch，隔离照旧、无 CORS。CDN 依赖（jsdelivr）作运行时 `import('https://…')` 保留。
 - **卡脚本抽取**：`card-scripts.mjs::extractMvuScripts(persona.card_data)` → schema/logic/data
   （跳 MagVarUpdate bundle + UI）。已对真卡验证。
 - **编排**：`MvuHostSession`（`init(cardData)` / `applyTurn(sync)` / `dispose()`）。
