@@ -152,6 +152,13 @@ class Settings(BaseSettings):
     # 上线并回传结算态（State Sync UP 通道）后，再在后续阶段据此关掉后端 apply。
     MVU_BROWSER_RUNTIME: bool = False
 
+    # MVU 退役后端 apply（ADR-0008c 阶段3，**默认关闭**）：
+    # on 且 MVU_BROWSER_RUNTIME on 且 uses_mvu 时，node_post_process **不再**把 ops 应用到
+    # conv.variables —— ops 随 mvu_browser_sync 下推，由前端 MVU Host 应用+派生并经
+    # PUT /mvu-state UP 回传持久化。浏览器成为 MVU 状态唯一权威。
+    # 默认关：后端照旧 apply（前端 UP 覆盖），保住无浏览器/关页时的兜底。前端运行时稳后再开。
+    MVU_RETIRE_BACKEND_APPLY: bool = False
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

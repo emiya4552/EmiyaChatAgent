@@ -61,6 +61,19 @@ from app.services.langgraph.state import ChatState
 logger = logging.getLogger(__name__)
 
 
+def _should_retire_backend_apply(state: dict) -> bool:
+    """ADR-0008c 阶段3：是否退役后端 MVU apply（交给前端 MVU Host）。
+
+    三条件同时满足：全局开关 `MVU_RETIRE_BACKEND_APPLY` + `MVU_BROWSER_RUNTIME` +
+    本对话 `persona_uses_mvu`。默认全 off → 恒 False → 后端照旧 apply。
+    """
+    return bool(
+        settings.MVU_RETIRE_BACKEND_APPLY
+        and settings.MVU_BROWSER_RUNTIME
+        and state.get("persona_uses_mvu")
+    )
+
+
 def _block_enabled(state: ChatState, key: str) -> bool:
     """检查当前 template 是否启用某个 block。
 
@@ -1094,9 +1107,15 @@ async def node_post_process(state: ChatState) -> dict:
             if update_diag["applied"] or update_diag["dropped"]:
                 update_channel = "text"
 
+        # ── ADR-0008c 阶段3：退役后端 apply（gated）──
+        # 开关 on 且浏览器运行时 on 且 uses_mvu 时，后端**不再 apply** —— ops 仍随 down-channel
+        # 下推，由前端 MVU Host 应用+派生并 UP 回传（含派生字段，比后端版更全）。默认 off：后端
+        # 照旧 apply（浏览器版经 UP 覆盖），保住无浏览器/关页时的兜底。ops 无论如何都留在 state 里。
+        _retire_apply = _should_retire_backend_apply(state)
+
         # ── ADR-0005：tool-calling 更新通道（与文本通道汇到同一校验+应用核心）──
         tool_calls = state.get("mvu_tool_calls")
-        if tool_calls:
+        if tool_calls and not _retire_apply:
             from app.services.mvu_runtime.tools import extract_update_ops_from_tool_calls
             from app.services.message_pipeline import _apply_json_patch_ops
             ops = extract_update_ops_from_tool_calls(tool_calls)
@@ -1112,7 +1131,7 @@ async def node_post_process(state: ChatState) -> dict:
                 update_channel = "tool"
 
         double_ai_ops = state.get("mvu_double_ai_ops")
-        if double_ai_ops:
+        if double_ai_ops and not _retire_apply:
             from app.services.message_pipeline import _apply_json_patch_ops
             scope_after = state.get("mvu_scope") or {"local": {}, "global": {}, "names": {}}
             local_bucket = scope_after.setdefault("local", {})
@@ -1123,6 +1142,10 @@ async def node_post_process(state: ChatState) -> dict:
             _apply_json_patch_ops(stat_data, double_ai_ops, mvu_constraints, update_diag)
             state["mvu_scope"] = scope_after
             update_channel = "double_ai"
+
+        # 退役模式下后端没 apply，但 ops 已下推给前端；诊断标注 channel=browser
+        if _retire_apply and (state.get("mvu_double_ai_ops") or state.get("mvu_tool_calls")):
+            update_channel = "browser"
 
         state["mvu_update_diag"] = update_diag
         state["mvu_update_channel"] = update_channel

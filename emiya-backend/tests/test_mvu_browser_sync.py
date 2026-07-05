@@ -5,6 +5,7 @@
 """
 from app.config import settings
 from app.services.chat_service import _build_mvu_browser_sync
+from app.services.langgraph.nodes import _should_retire_backend_apply
 
 
 def _state(**over):
@@ -52,3 +53,21 @@ def test_missing_mvu_scope_is_safe(monkeypatch):
     sync = _build_mvu_browser_sync(_state(mvu_scope=None, mvu_tool_calls=None))
     assert sync["base_stat"] == {}
     assert sync["tool_calls"] == []
+
+
+# ── ADR-0008c 阶段3：退役后端 apply 门控 ──
+
+def test_retire_gate_off_by_default(monkeypatch):
+    monkeypatch.setattr(settings, "MVU_BROWSER_RUNTIME", True)
+    monkeypatch.setattr(settings, "MVU_RETIRE_BACKEND_APPLY", False)
+    assert _should_retire_backend_apply(_state()) is False
+
+
+def test_retire_gate_needs_all_three(monkeypatch):
+    monkeypatch.setattr(settings, "MVU_RETIRE_BACKEND_APPLY", True)
+    monkeypatch.setattr(settings, "MVU_BROWSER_RUNTIME", True)
+    assert _should_retire_backend_apply(_state(persona_uses_mvu=True)) is True
+    # 缺任一 → 不退役
+    assert _should_retire_backend_apply(_state(persona_uses_mvu=False)) is False
+    monkeypatch.setattr(settings, "MVU_BROWSER_RUNTIME", False)
+    assert _should_retire_backend_apply(_state(persona_uses_mvu=True)) is False

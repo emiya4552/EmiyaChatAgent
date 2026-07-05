@@ -47,3 +47,21 @@ export function resolveCapability(cap, policy = defaultCapabilityPolicy, args) {
       return { allow: p.allowUnknown === true, tier, reason: p.allowUnknown === true ? undefined : `unknown cap: ${cap}` }
   }
 }
+
+/**
+ * 生成 MvuHostController 用的 capabilityHandler（ADR-0008d）。按 `resolveCapability` 裁决：
+ *   - 拒绝 → throw（Bridge 回 cap-result ok:false）。
+ *   - 放行 → 若给了 `providers[cap]` 就调它取真实数据（如后端 getWorldbook）；否则安全默认
+ *     （getWorldbook→[]，其余→null）。
+ * `providers` 里放接后端/EMIYA 数据的实现（read 类）；dangerous 类需 policy.dangerous=true
+ * 且提供对应 provider（如 generateRaw/setChatMessages 接后端端点）才会真正执行。
+ */
+export function makeCapabilityHandler({ policy, providers = {} } = {}) {
+  return async function capabilityHandler(cap, args) {
+    const r = resolveCapability(cap, policy, args)
+    if (!r.allow) throw new Error(r.reason || `capability denied: ${cap}`)
+    if (typeof providers[cap] === 'function') return providers[cap](args)
+    if (cap === 'getWorldbook' || cap === 'getWorldInfo' || cap === 'getLorebook') return []
+    return null
+  }
+}

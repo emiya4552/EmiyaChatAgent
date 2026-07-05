@@ -121,17 +121,39 @@ export async function installShims(win = window) {
   win.confirm = win.confirm || (() => false)
 }
 
+/** 把一段 ESM 卡脚本源规整成可作为 classic <script> 注入的等价源（纯函数，可测）。
+ *
+ * 卡脚本本是 ESM 模块（顶层 `import`/`export`），但 Host 按 classic IIFE 注入（sloppy 模式更宽容、
+ * 天然作用域隔离）。故须把模块语法降级为等价的普通语句：
+ *  - 剥掉**所有静态** import 语句：引擎与库由 Host 全局 shim 提供（`registerMvuSchema`/`z`/`_`/`$`/
+ *    `Mvu`/`eventOn`…），无需真去 CDN 拉（MagVarUpdate 引擎整脚本更是早在 classify='bundle' 就 skip）。
+ *    **保留动态 `import()`**（UI 脚本按需拉 jquery-ui 等，见 0008d）。
+ *  - 剥掉 export：`export const/let/var/function/class/async` 去前缀；`export default …`/`export {…}` 去整句。
+ *    让模块顶层导出退化成 IIFE 内普通声明（同 IIFE 内的 `$(()=>registerMvuSchema(Schema))` 闭包照常捕获）。
+ *
+ * 依据（verify-against-cards，DB 内 3 张 MVU 卡全量实测：伶伶/WuWa/魔法少女）：静态 import 仅出现为
+ * MagVarUpdate 引擎与 mvu_zod 的 `registerMvuSchema`；export 仅为 schema 的 `export const Schema`；
+ * 无列 0 隐式全局。变换对 logic/data（无 import/export）为 no-op，故可安全套到所有 kind。 */
+export function stripModuleSyntax(code) {
+  let c = String(code || '')
+  // 静态 import 语句（单行形态覆盖卡实况）：`import 'x'` / `import x from 'x'` / `import {…} from 'x'` /
+  // `import * as ns from 'x'`。负向前瞻排除动态 `import(`（含 `import (` 空格形态）。
+  c = c.replace(/^[ \t]*import\s+(?!\()(?:[^;\n(]*?\s+from\s+)?['"][^'"]+['"][ \t]*;?[ \t]*$/gm, '')
+  // export：default / 具名导出整句 / 声明前缀
+  c = c.replace(/^[ \t]*export\s+default\s+/gm, '')
+  c = c.replace(/^[ \t]*export\s*\{[^}]*\}[ \t]*(?:from\s*['"][^'"]+['"])?[ \t]*;?[ \t]*$/gm, '')
+  c = c.replace(/^[ \t]*export\s+(?=(?:const|let|var|function|class|async)\b)/gm, '')
+  return c
+}
+
 /** 浏览器：把卡脚本注入沙箱。schema/data/logic 都作为 classic IIFE 注入（避免顶层词法互撞）。
  * schema 脚本里的 `registerMvuSchema` 由薄 Mvu 层捕获（win.registerMvuSchema）。*/
 /** 载入前对卡脚本源做的有界变换（纯函数，可测）：
- *  - schema：去掉 ESM `import {…} from '…mvu_zod…'`（改用全局 win.registerMvuSchema）。
+ *  - 所有 kind：`stripModuleSyntax` 把 ESM import/export 降级（见上）。
  *  - ui（ADR-0008d）：把 `window.parent`/`window.top`/裸 `parent`/`top` 重写成 `window`，
  *    让卡 UI 挂到本 iframe 而非被沙箱阻断的宿主窗口（卡的 `window.parent.$ || window.$` 变本地挂载）。*/
 export function prepareCardCode(sc) {
-  let code = String((sc && sc.code) || '')
-  if (sc && sc.kind === 'schema') {
-    code = code.replace(/import\s*\{[^}]*\}\s*from\s*['"][^'"]*mvu_zod[^'"]*['"];?/g, '')
-  }
+  let code = stripModuleSyntax((sc && sc.code) || '')
   if (sc && sc.kind === 'ui') {
     code = code
       .replace(/window\s*\.\s*parent/g, 'window')

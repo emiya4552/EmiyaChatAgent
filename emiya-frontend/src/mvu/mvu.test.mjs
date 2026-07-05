@@ -4,10 +4,10 @@ import {
   parseUpdateOps, toolCallsToOps, validateOps, applyOps, createThinMvu,
 } from './mvu-runtime.mjs'
 import { classifyMvuScript, extractMvuScripts, cardHasMvuStateScripts } from './card-scripts.mjs'
-import { createBridge, MVU_MSG, prepareCardCode } from './mvu-host-bootstrap.mjs'
+import { createBridge, MVU_MSG, prepareCardCode, stripModuleSyntax } from './mvu-host-bootstrap.mjs'
 import { MvuHostController } from './mvu-host-controller.mjs'
 import { MvuHostSession } from './mvu-host-session.mjs'
-import { classifyCapability, resolveCapability } from './mvu-capabilities.mjs'
+import { classifyCapability, resolveCapability, makeCapabilityHandler } from './mvu-capabilities.mjs'
 
 const tick = () => new Promise((r) => setTimeout(r))
 
@@ -256,9 +256,64 @@ describe('ADR-0008d 能力限权', () => {
     expect(ui).toMatch(/window\.\$ \|\| window\.\$/)
   })
 
+  it('stripModuleSyntax: 通用 ESM→classic（覆盖伶伶/WuWa/魔法少女 schema 真实形态）', () => {
+    // 真卡 schema 统一形态：mvu_zod 具名 import + `export const Schema` + $(ready) 注册
+    const real = [
+      "import { registerMvuSchema } from 'https://cdn.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';",
+      '',
+      'export const Schema = z.object({ 好感度: z.coerce.number().transform(v => _.clamp(v, 0, 100)) });',
+      '',
+      '$(() => { registerMvuSchema(Schema); });',
+    ].join('\n')
+    const out = stripModuleSyntax(real)
+    expect(out).not.toMatch(/^\s*import\b/m) // 静态 import 全剥
+    expect(out).not.toMatch(/\bexport\b/)    // export 关键字剥掉
+    expect(out).toMatch(/const Schema = z\.object/) // 声明保留
+    expect(out).toMatch(/registerMvuSchema\(Schema\)/) // 注册调用保留（走全局 shim）
+    // 包成 IIFE 后应能被 JS 引擎解析（不再是模块语法）
+    expect(() => new Function(`(function(){\n${out}\n});`)).not.toThrow()
+  })
+
+  it('stripModuleSyntax: 剥各种 import/export 形态但保留动态 import()', () => {
+    const s = stripModuleSyntax([
+      "import 'https://x/bundle.js';",
+      "import def from 'a';",
+      "import * as ns from 'b';",
+      "import { a, b } from 'c';",
+      'export default foo;',
+      'export { a, b };',
+      'export function calc() { return 1; }',
+      "const later = () => import('https://x/jquery-ui/+esm');", // 动态 import 必须保留
+    ].join('\n'))
+    expect(s).not.toMatch(/^\s*import\s+[^(]/m) // 静态 import 全无
+    expect(s).not.toMatch(/^\s*export\b/m)      // export 语句全无
+    expect(s).toMatch(/function calc\(\)/)       // 声明体保留
+    expect(s).toMatch(/import\('https:\/\/x\/jquery-ui/) // 动态 import 保留
+  })
+
   it('extractMvuScripts includeUi: 开关纳入 UI 脚本', () => {
     expect(extractMvuScripts(FIXTURE_CARD).scripts.some((s) => s.kind === 'ui')).toBe(false)
     const withUi = extractMvuScripts(FIXTURE_CARD, { includeUi: true })
     expect(withUi.scripts.some((s) => s.kind === 'ui')).toBe(true)
+  })
+
+  it('makeCapabilityHandler: read 放行取 provider / dangerous 默认拒 / opt-in 放行', async () => {
+    const h = makeCapabilityHandler({ policy: { dangerous: false }, providers: { getWorldbook: async () => [{ x: 1 }] } })
+    await expect(h('getWorldbook', {})).resolves.toEqual([{ x: 1 }]) // provider
+    await expect(h('getWorldInfo', {})).resolves.toEqual([]) // 无 provider → 安全默认
+    await expect(h('generateRaw', {})).rejects.toThrow(/default-denied/) // dangerous 拒
+    const h2 = makeCapabilityHandler({ policy: { dangerous: true }, providers: { generateRaw: async () => 'reply' } })
+    await expect(h2('generateRaw', {})).resolves.toBe('reply') // opt-in + provider
+  })
+
+  it('MvuHostSession includeUi + capabilityHandler 透传', async () => {
+    let gotOpts = null
+    const factory = (_url, opts) => { gotOpts = opts; return { controller: { ready: async () => {}, loadCard: async () => {}, applyTurn: async () => ({ stat_data: {}, diag: {} }), dispose: () => {} }, iframe: {} } }
+    const capH = async () => null
+    const { MvuHostSession } = await import('./mvu-host-session.mjs')
+    const sess = new MvuHostSession({ hostFactory: factory, includeUi: true, capabilityHandler: capH })
+    const r = await sess.init(FIXTURE_CARD)
+    expect(r.scripts.some((s) => s.kind === 'ui')).toBe(true) // includeUi 生效
+    expect(gotOpts.capabilityHandler).toBe(capH) // handler 透传给 factory
   })
 })
