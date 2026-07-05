@@ -209,7 +209,10 @@ describe('ADR-0008d 能力限权', () => {
   it('classifyCapability: local/read/dangerous', () => {
     expect(classifyCapability('generateRaw')).toBe('dangerous')
     expect(classifyCapability('setChatMessages')).toBe('dangerous')
+    expect(classifyCapability('createChatMessages')).toBe('dangerous')
+    expect(classifyCapability('deleteChatMessages')).toBe('dangerous')
     expect(classifyCapability('getWorldbook')).toBe('read')
+    expect(classifyCapability('getChatMessages')).toBe('read') // ADR-0008d：读会话楼层
     expect(classifyCapability('getVariables', { type: 'global' })).toBe('read')
     expect(classifyCapability('getVariables', { type: 'message' })).toBe('local')
     expect(classifyCapability('somethingWeird')).toBe('unknown')

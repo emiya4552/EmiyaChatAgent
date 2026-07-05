@@ -121,11 +121,22 @@ export function buildHostDoc(bundleSrc) {
  *
  * @param _hostUrl 已弃用（srcdoc 内联注入，无需 URL）；保留形参以兼容既有调用/测试签名。
  * @param sandbox 默认 'allow-scripts'（不加 allow-same-origin → 不透明源，碰不到 EMIYA session/DOM）。
+ * @param visible ADR-0008d UI 阶段：true 时 iframe 可见并填满 parent（停靠栏容器）；缺省无头 display:none。
+ * @param parent iframe 挂载点。UI 阶段传停靠栏容器；**注意 iframe 一旦创建不可移动（移动会重载）**，故须
+ *   在建 Host 前就把容器备好并从这里传入。
  */
-export function createIframeHost(_hostUrl, { sandbox = 'allow-scripts', parent = document.body, capabilityHandler } = {}) {
+export function createIframeHost(_hostUrl, { sandbox = 'allow-scripts', parent = document.body, capabilityHandler, visible = false } = {}) {
   const iframe = document.createElement('iframe')
   iframe.setAttribute('sandbox', sandbox)
-  iframe.style.display = 'none' // 状态阶段无头；UI 阶段（0008d）改可见 + 布局停靠区
+  if (visible) {
+    // UI 阶段：填满停靠栏容器；样式隔离由沙箱 iframe 天然提供。
+    iframe.style.width = '100%'
+    iframe.style.height = '100%'
+    iframe.style.border = '0'
+    iframe.style.display = 'block'
+  } else {
+    iframe.style.display = 'none' // 状态阶段无头
+  }
 
   const controller = new MvuHostController({
     send: (m) => iframe.contentWindow && iframe.contentWindow.postMessage(m, '*'),

@@ -105,3 +105,47 @@ export async function updateMvuState(convId: string, statData: Record<string, an
   const res = await api.put(`/v1/conversations/${convId}/mvu-state`, { stat_data: statData })
   return res.data
 }
+
+// ── ADR-0008d：MVU 卡 UI 危险能力 per-conversation 开关 + 卡能力后端端点（provider）──
+
+// PATCH /v1/conversations/{id}/mvu-capabilities — 开/关某会话的危险能力（卡调 LLM / 改会话）
+export async function setMvuCapabilities(convId: string, dangerous: boolean): Promise<Conversation> {
+  const res = await api.patch(`/v1/conversations/${convId}/mvu-capabilities`, { dangerous })
+  return res.data
+}
+
+// read：getWorldbook —— 会话绑定世界书条目（只读）
+export async function mvuGetWorldbook(convId: string, name?: string): Promise<any[]> {
+  const res = await api.get(`/v1/conversations/${convId}/mvu/worldbook`, { params: name ? { name } : {} })
+  return res.data
+}
+
+// read：getChatMessages —— 按 TavernHelper id/range 读会话楼层
+export async function mvuGetChatMessages(convId: string, range: string): Promise<any[]> {
+  const res = await api.get(`/v1/conversations/${convId}/mvu/chat-messages`, { params: { range } })
+  return res.data
+}
+
+// dangerous：generateRaw —— 卡触发 LLM 生成（后端忽略卡自带 custom_api，用 EMIYA LLM + 封顶 token）
+export async function mvuGenerateRaw(convId: string, config: Record<string, any>): Promise<{ text: string }> {
+  const res = await api.post(`/v1/conversations/${convId}/mvu/generate`, config)
+  return res.data
+}
+
+// dangerous：createChatMessages —— 卡往会话追加楼层（带 per-message data）
+export async function mvuCreateChatMessages(convId: string, messages: any[], insertBefore?: number | null): Promise<any[]> {
+  const res = await api.post(`/v1/conversations/${convId}/mvu/chat-messages`, { messages, insert_before: insertBefore ?? null })
+  return res.data
+}
+
+// dangerous：setChatMessages —— 按 message_id 改楼层文本/data
+export async function mvuSetChatMessages(convId: string, messages: any[]): Promise<any[]> {
+  const res = await api.patch(`/v1/conversations/${convId}/mvu/chat-messages`, { messages })
+  return res.data
+}
+
+// dangerous：deleteChatMessages —— 按 message_id 删楼层
+export async function mvuDeleteChatMessages(convId: string, messageIds: number[]): Promise<{ deleted: number }> {
+  const res = await api.delete(`/v1/conversations/${convId}/mvu/chat-messages`, { data: { message_ids: messageIds } })
+  return res.data
+}

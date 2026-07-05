@@ -75,6 +75,7 @@ from app.api.presets import router as presets_router
 from app.api.regex_presets import router as regex_presets_router
 from app.api.templates import router as templates_router
 from app.api.memories import router as memories_router
+from app.api.mvu_host import router as mvu_host_router
 from app.api.relationships import router as relationships_router
 from app.api.users import router as users_router
 from app.api.worldbooks import router as worldbooks_router
@@ -88,6 +89,7 @@ app.include_router(presets_router)
 app.include_router(regex_presets_router)
 app.include_router(templates_router)
 app.include_router(memories_router)
+app.include_router(mvu_host_router)
 app.include_router(relationships_router)
 app.include_router(users_router)
 app.include_router(worldbooks_router)

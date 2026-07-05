@@ -192,6 +192,8 @@ export interface Conversation {
   // MVU 对话级变量桶（详见 ADR-0007）；只读暴露给前端展示
   variables: Record<string, unknown>
   mvu_state: MvuConversationState | null
+  // MVU 卡界面危险能力 per-conversation 开关（ADR-0008d）；{ dangerous?: boolean }
+  mvu_capabilities: Record<string, unknown>
   created_at: string
   updated_at: string
 }

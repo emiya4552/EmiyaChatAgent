@@ -10,6 +10,7 @@ const LOCAL = new Set([
 ])
 const READ = new Set([
   'getWorldbook', 'getWorldInfo', 'getLorebook', 'getCharLorebooks',
+  'getChatMessages', // 读会话楼层（卡 UI 读历史，如飞讯终端）
 ])
 const DANGEROUS = new Set([
   'generateRaw', 'generate', 'setChatMessages', 'createChatMessages', 'deleteChatMessages',

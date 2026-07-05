@@ -219,6 +219,10 @@
             <n-switch v-model:value="togglesLocal.analyze_emotion" />
             <span class="switch-hint">关闭后跳过每轮情绪 LLM 调用（不写 EmotionRecord / 不更新 mood / SSE emotion 不发）；前端 mood emoji 和趋势图也不再更新</span>
           </n-form-item>
+          <n-form-item label="卡界面危险能力" label-placement="left">
+            <n-switch :value="mvuDangerousLocal" :loading="mvuCapSaving" @update:value="onToggleMvuDangerous" />
+            <span class="switch-hint">ADR-0008d：允许卡界面（如手机终端）调用 LLM 生成（generateRaw，花 token）与修改会话楼层（setChatMessages）。默认关闭，仅对信任的卡开启。read/本地能力不受此限。</span>
+          </n-form-item>
         </div>
       </n-collapse-item>
 
@@ -264,7 +268,7 @@ import { useConversationStore } from '../../stores/conversation'
 import { useChatStore } from '../../stores/chat'
 import {
   updateConversationConfig, updateConversationToggles, clearConversationVariables,
-  reloadMvuInitialState,
+  reloadMvuInitialState, setMvuCapabilities,
   applyPreset, switchTemplate, switchRegexPreset,
 } from '../../api/conversation'
 import {
@@ -324,6 +328,26 @@ const anLocal = ref<{
   an_interval: 1,
 })
 const togglesLocal = ref<{ analyze_emotion: boolean }>({ analyze_emotion: true })
+
+// ── ADR-0008d：MVU 卡界面危险能力 per-conversation 开关（即时保存，独立于下方 saveAll）──
+const mvuDangerousLocal = ref(false)
+const mvuCapSaving = ref(false)
+async function onToggleMvuDangerous(val: boolean) {
+  const convId = convStore.currentId
+  if (!convId) return
+  mvuCapSaving.value = true
+  try {
+    const updated = await setMvuCapabilities(convId, val)
+    const idx = convStore.list.findIndex(c => c.id === convId)
+    if (idx !== -1) convStore.list[idx] = { ...convStore.list[idx], mvu_capabilities: updated.mvu_capabilities }
+    mvuDangerousLocal.value = val
+    message.success(val ? '已开启卡界面危险能力（下次载卡生效）' : '已关闭卡界面危险能力')
+  } catch (e: any) {
+    message.error('保存失败：' + (e?.message || e))
+  } finally {
+    mvuCapSaving.value = false
+  }
+}
 
 // ── MVU 对话级变量展示 ──
 const variablesEntries = computed<[string, unknown][]>(() => {
@@ -474,6 +498,7 @@ watch(() => props.visible, async (v) => {
   togglesLocal.value = {
     analyze_emotion: conv?.analyze_emotion ?? true,
   }
+  mvuDangerousLocal.value = !!((conv?.mvu_capabilities as any)?.dangerous)
   // 三件套绑定快照 — 保存时与 initial 对比，只发起改过的字段
   const snap = {
     preset_id: conv?.preset_id ?? null,

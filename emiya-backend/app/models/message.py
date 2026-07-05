@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -34,6 +34,10 @@ class Message(Base):
     # 由后端在持久化时派生，前端优先渲染它；NULL 时回退用 content。
     # 无法从 content 反推（两者从同一 precursor 分叉），故必须落库。
     display_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 每条消息的变量袋（TavernHelper `data`，ADR-0008d）。卡 UI（如 WuWa 飞讯手机终端）
+    # 用 setChatMessages/createChatMessages 往消息上挂结构化状态；不参与 prompt/显示，
+    # 仅供卡 UI 经能力端点读写。NULL = 无。
+    data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # 创建时间
     created_at: Mapped[datetime] = mapped_column(
         default=datetime.utcnow, nullable=False
