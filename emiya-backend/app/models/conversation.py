@@ -71,6 +71,12 @@ class Conversation(Base, TimestampMixin):
         Boolean, nullable=False, default=True
     )
 
+    # === MVU 卡 UI 危险能力 per-conversation 限权（ADR-0008d D2） ===
+    # 卡 UI（如飞讯手机终端）会调 generateRaw（卡触发 LLM=花 token）/ setChatMessages（卡改会话楼层）
+    # 等 dangerous 能力，默认全拒；用户对某个会话显式开启（{"dangerous": true}）后才经后端端点执行。
+    # read（getWorldbook 等）默认允许，local（本回合 stat_data）Host 内本地做，均不受此开关限制。
+    mvu_capabilities: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
     user: Mapped["User"] = relationship("User", backref="conversations")
     persona: Mapped["Persona | None"] = relationship("Persona", foreign_keys=[persona_id])
     user_persona: Mapped["Persona | None"] = relationship("Persona", foreign_keys=[user_persona_id])

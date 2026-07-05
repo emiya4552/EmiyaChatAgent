@@ -71,6 +71,8 @@ class ConversationResponse(BaseModel):
     variables: dict = {}
     # MVU 初始化/重载状态摘要（详见 docs/mvu/adr/0002）
     mvu_state: dict | None = None
+    # MVU 卡 UI 危险能力 per-conversation 开关（ADR-0008d）；{"dangerous": bool}，默认 {} = 全拒
+    mvu_capabilities: dict = {}
     created_at: datetime
     updated_at: datetime
 

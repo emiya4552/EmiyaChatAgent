@@ -180,9 +180,11 @@ export function makeLoadCardScripts(win = window) {
  * `resolveCapability` 放行/拒绝）。local 能力（本回合 stat_data 读写）在 Host 内本地做，不round-trip。 */
 export function installCapabilityShims(win, Mvu, requestCap) {
   win.getWorldbook = (book) => requestCap('getWorldbook', { book }) // read
+  win.getChatMessages = (range, opts) => requestCap('getChatMessages', { range, opts }) // read（读会话楼层）
   win.generateRaw = (cfg) => requestCap('generateRaw', cfg) // dangerous（默认被拒）
   win.setChatMessages = (msgs, opts) => requestCap('setChatMessages', { msgs, opts }) // dangerous
   win.createChatMessages = (msgs, opts) => requestCap('createChatMessages', { msgs, opts }) // dangerous
+  win.deleteChatMessages = (ids, opts) => requestCap('deleteChatMessages', { ids, opts }) // dangerous
   win.getVariables = (args) => (args && args.type === 'global'
     ? requestCap('getVariables', args) // read（全局会话变量）
     : Promise.resolve({ stat_data: Mvu.getStatData() })) // local（本回合 stat_data）
@@ -190,6 +192,11 @@ export function installCapabilityShims(win, Mvu, requestCap) {
   win.TavernHelper = win.TavernHelper || {}
   win.TavernHelper.getVariables = win.getVariables
   win.TavernHelper.getWorldbook = win.getWorldbook
+  win.TavernHelper.getChatMessages = win.getChatMessages
+  win.TavernHelper.setChatMessages = win.setChatMessages
+  win.TavernHelper.createChatMessages = win.createChatMessages
+  win.TavernHelper.deleteChatMessages = win.deleteChatMessages
+  win.TavernHelper.generateRaw = win.generateRaw
 }
 
 /** 浏览器入口：在沙箱 iframe 文档里调用。装环境→装薄 Mvu→接 Bridge+能力 shim→通知父 ready。 */

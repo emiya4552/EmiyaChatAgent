@@ -4,12 +4,20 @@ import type { Message } from '../types'
 import * as chatApi from '../api/chat'
 import { useConversationStore } from './conversation'
 import { fetchPersonaDetail } from '../api/persona'
-import { updateMvuState } from '../api/conversation'
+import {
+  updateMvuState,
+  mvuGetWorldbook, mvuGetChatMessages, mvuGenerateRaw,
+  mvuCreateChatMessages, mvuSetChatMessages, mvuDeleteChatMessages,
+} from '../api/conversation'
 import { setMvuStatData } from '../composables/useHtmlIframeRender'
 // ADR-0008c 阶段2：浏览器 MVU Host（仅当后端开 MVU_BROWSER_RUNTIME、message_done 带
 // mvu_browser_sync 时才懒创建 iframe；flag 关时零开销）。.mjs 无 TS 声明，用 any 承接。
 // @ts-ignore
 import { MvuHostSession } from '../mvu/mvu-host-session.mjs'
+// @ts-ignore
+import { extractMvuScripts } from '../mvu/card-scripts.mjs'
+// @ts-ignore
+import { makeCapabilityHandler } from '../mvu/mvu-capabilities.mjs'
 
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<Message[]>([])
@@ -26,19 +34,70 @@ export const useChatStore = defineStore('chat', () => {
   let _currentPage = 0
   const _pageSize = 200
 
-  // ── ADR-0008c 阶段2：浏览器 MVU Host 会话（懒创建 + 预热，见 src/mvu/README.md）──
+  // ── ADR-0008c/d：浏览器 MVU Host 会话（懒创建 + 预热 + UI 停靠栏，见 src/mvu/README.md）──
   let mvuSession: any = null
   let mvuSessionConvId: string | null = null
   let mvuInitPromise: Promise<any> | null = null // 建 Host 的在途 promise：并发/重复触发共享同一次构建，避免竞态重建 + 双份 CDN 加载
   let mvuLastTurnKey: string | null = null        // 已处理的 message_done 去重键（两个 onDone 路径会各触发一次同一回合）
+  // ADR-0008d：卡 UI 停靠栏。容器由 MvuHostDock.vue 注册；mvuHostActive 决定停靠栏是否显示。
+  const mvuHostContainer = ref<HTMLElement | null>(null)
+  const mvuHostActive = ref(false) // 当前卡有可渲染 UI（logic/ui 脚本）且容器就绪时为真 → 显示停靠栏
+  let _mvuContainerWaiters: Array<(el: HTMLElement | null) => void> = []
+  function registerMvuHostContainer(el: HTMLElement | null) {
+    mvuHostContainer.value = el
+    if (el) { _mvuContainerWaiters.forEach((w) => w(el)); _mvuContainerWaiters = [] }
+  }
+  // 等停靠栏容器就绪（iframe 建成后不可移动，故须建 Host 前备好容器）。超时 → null（无头兜底）。
+  function _waitForMvuContainer(timeoutMs = 4000): Promise<HTMLElement | null> {
+    if (mvuHostContainer.value) return Promise.resolve(mvuHostContainer.value)
+    return new Promise((resolve) => {
+      const w = (el: HTMLElement | null) => resolve(el)
+      _mvuContainerWaiters.push(w)
+      setTimeout(() => {
+        const i = _mvuContainerWaiters.indexOf(w)
+        if (i >= 0) { _mvuContainerWaiters.splice(i, 1); resolve(mvuHostContainer.value) }
+      }, timeoutMs)
+    })
+  }
   function disposeMvuSession() {
     if (mvuSession) { try { mvuSession.dispose() } catch { /* ignore */ } mvuSession = null }
     mvuSessionConvId = null
     mvuInitPromise = null
+    mvuHostActive.value = false
+  }
+
+  // ADR-0008d：给某会话构建能力处理器。read（getWorldbook/getChatMessages）默认放行走后端只读端点；
+  // dangerous（generateRaw 卡调 LLM / set/create/deleteChatMessages 卡改会话）仅在该会话 opt-in 时放行。
+  function _buildMvuCapabilityHandler(conversationId: string, dangerous: boolean) {
+    const cid = conversationId
+    const providers = {
+      // read
+      getWorldbook: (a: any) => mvuGetWorldbook(cid, a?.book),
+      getChatMessages: (a: any) => mvuGetChatMessages(cid, String(a?.range ?? '-1')),
+      getVariables: async () => ({}), // 全局会话变量：EMIYA 无 → 空对象（卡兜底）
+      // dangerous
+      generateRaw: (cfg: any) => mvuGenerateRaw(cid, {
+        user_input: cfg?.user_input, prompt: cfg?.prompt,
+        ordered_prompts: cfg?.ordered_prompts,
+        temperature: cfg?.temperature, max_tokens: cfg?.max_tokens,
+      }).then((r: any) => r?.text ?? ''),
+      setChatMessages: (a: any) => mvuSetChatMessages(cid, (a?.msgs || []).map((m: any) => ({
+        message_id: m?.message_id, message: m?.message, data: m?.data,
+      }))),
+      createChatMessages: (a: any) => {
+        const ib = a?.opts?.insert_before
+        return mvuCreateChatMessages(cid, (a?.msgs || []).map((m: any) => ({
+          role: m?.role, message: m?.message, data: m?.data,
+        })), typeof ib === 'number' ? ib : null)
+      },
+      deleteChatMessages: (a: any) => mvuDeleteChatMessages(cid, (a?.ids || []).map((x: any) => Number(x))).then((r: any) => r?.deleted ?? 0),
+    }
+    return makeCapabilityHandler({ policy: { read: true, dangerous }, providers })
   }
 
   // 确保当前对话的 Host 会话就绪。并发/重复调用共享同一 in-flight 构建（去掉双 onDone 造成的双份建 iframe +
   // 双份 jsdelivr CDN 加载的竞态）。非 MVU 卡（无可跑脚本）返回 null 且不建 iframe。
+  // ADR-0008d：卡有 UI（logic/ui 脚本）时载 UI 脚本 + 把 iframe 挂进停靠栏可见渲染 + 接能力处理器。
   function ensureMvuSession(conversationId: string): Promise<any> {
     if (mvuSession && mvuSessionConvId === conversationId) return Promise.resolve(mvuSession)
     if (mvuInitPromise && mvuSessionConvId === conversationId) return mvuInitPromise
@@ -49,10 +108,21 @@ export const useChatStore = defineStore('chat', () => {
       const personaId = conv?.persona_id
       if (!personaId) return null
       const detail = await fetchPersonaDetail(personaId) as any
-      const sess = new MvuHostSession()
+      // 卡有没有可渲染 UI（schema-only 如伶伶 → 无 UI，不亮停靠栏）
+      const extracted = extractMvuScripts(detail?.card_data, { includeUi: true })
+      const hasUi = (extracted?.scripts || []).some((s: any) => s.kind === 'ui' || s.kind === 'logic')
+      const container = hasUi ? await _waitForMvuContainer() : null
+      const dangerous = !!(conv?.mvu_capabilities?.dangerous)
+      const sess = new MvuHostSession({
+        includeUi: true,
+        visible: !!container,
+        hostContainer: container || undefined,
+        capabilityHandler: _buildMvuCapabilityHandler(conversationId, dangerous),
+      })
       const r = await sess.init(detail?.card_data)
       if (!r?.ok) { sess.dispose(); return null }
       mvuSession = sess
+      mvuHostActive.value = !!container // 有可见 UI 才亮停靠栏
       return sess
     })().catch((e) => { console.warn('[MVU] Host 会话构建失败:', e); return null })
     mvuInitPromise = p
@@ -335,6 +405,9 @@ export const useChatStore = defineStore('chat', () => {
     error,
     mvuRuntimeView,
     hasMoreMessages,
+    // ADR-0008d：卡 UI 停靠栏（MvuHostDock.vue 注册容器 / 据 mvuHostActive 显示）
+    mvuHostActive,
+    registerMvuHostContainer,
     fetchMessages,
     loadEarlierMessages,
     sendMessage,

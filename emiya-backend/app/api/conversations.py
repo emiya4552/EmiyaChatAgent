@@ -91,6 +91,7 @@ def _conv_to_response(c, reply_length_enabled: bool = True):
         reply_length_enabled=reply_length_enabled,
         variables=c.variables or {},
         mvu_state=describe_conversation_mvu_state(c.variables or {}),
+        mvu_capabilities=c.mvu_capabilities or {},
         created_at=c.created_at,
         updated_at=c.updated_at,
     )
@@ -230,6 +231,31 @@ async def update_conversation_toggles(
     db.add(conv)
     await db.commit()
     # get_conversation_by_id 已带 joinedload，再调一次拿一致的关联对象
+    fresh = await get_conversation_by_id(db, conversation_id, current_user.id)
+    return await _conv_to_response_with_derived(fresh, db)
+
+
+class MvuCapabilitiesUpdate(BaseModel):
+    """ADR-0008d：per-conversation MVU 卡 UI 危险能力开关。"""
+    dangerous: bool = Field(..., description="允许卡 UI 调 generateRaw（卡调 LLM）/ setChatMessages（卡改会话）等危险能力")
+
+
+@router.patch("/{conversation_id}/mvu-capabilities", response_model=ConversationResponse)
+async def update_conversation_mvu_capabilities(
+    conversation_id: UUID,
+    request: MvuCapabilitiesUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """开/关某会话的 MVU 卡 UI 危险能力（generateRaw / 改会话楼层）。默认关；开启后经 mvu_host 端点执行。"""
+    conv = await get_conversation_by_id(db, conversation_id, current_user.id)
+    if conv is None:
+        raise NotFoundException("对话不存在")
+    caps = dict(conv.mvu_capabilities or {})
+    caps["dangerous"] = bool(request.dangerous)
+    conv.mvu_capabilities = caps
+    db.add(conv)
+    await db.commit()
     fresh = await get_conversation_by_id(db, conversation_id, current_user.id)
     return await _conv_to_response_with_derived(fresh, db)
 

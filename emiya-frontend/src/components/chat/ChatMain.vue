@@ -91,6 +91,9 @@
         <ConversationConfigPanel :visible="showConfigPanel" @close="showConfigPanel = false" />
       </div>
     </n-modal>
+
+    <!-- ADR-0008d：卡 UI 右侧可折叠停靠栏（仅当卡有可渲染 UI 时显示） -->
+    <MvuHostDock />
   </div>
 </template>
 
@@ -107,6 +110,7 @@ import ChatInput from './ChatInput.vue'
 import RelationshipBar from '../relationship/RelationshipBar.vue'
 import MilestoneMessage from './MilestoneMessage.vue'
 import ConversationConfigPanel from './ConversationConfigPanel.vue'
+import MvuHostDock from './MvuHostDock.vue'
 import { fetchConversationRelationship } from '../../api/relationship'
 import { fetchPersonas, fetchPersonaDetail } from '../../api/persona'
 import { switchGreeting } from '../../api/conversation'
@@ -339,6 +343,7 @@ function handleStop() {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative; /* ADR-0008d：承载右侧卡 UI 停靠栏（absolute） */
 }
 .chat-header {
   padding: 10px 20px;
