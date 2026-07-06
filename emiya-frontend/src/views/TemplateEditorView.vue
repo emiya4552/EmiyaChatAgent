@@ -45,7 +45,7 @@
               <li><code>reply_length</code> 块：关掉时聊天页右上的<strong>短/中/长按钮组会被禁用</strong>（详见 ADR-0014）</li>
               <li><code>mes_example</code> / <code>author_note</code> / <code>outlet</code> / 静态 / 变量块：关掉则该块不参与 prompt 拼接</li>
             </ul>
-            想关闭某项功能时，<strong>不必另设开关</strong>——直接关掉对应块即可（情绪分析除外：它没有模板块，独立放在对话设置面板）。
+            想关闭某项功能时，<strong>不必另设开关</strong>——直接关掉对应块即可（情感分析除外：情绪+好感度感知没有模板块，独立放在对话设置面板；见 ADR-0019）。
           </n-alert>
 
           <div v-if="form.blocks.length === 0" class="empty-hint">

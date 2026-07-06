@@ -64,9 +64,12 @@ class Conversation(Base, TimestampMixin):
     # 由 {{setvar}}/{{getvar}}/{{incvar}}/{{decvar}} 宏读写，跨轮持久化
     variables: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
-    # === 情绪分析功能开关（无 template block，独立 conv 级开关） ===
-    # 关闭后：跳过 node_analyze_emotion（省 LLM 调用）；连带不写 EmotionRecord、
-    # 不更新 mood、affinity 评估缺一个输入维度（用默认"平静"）
+    # === 情感分析（感知）总开关（无 template block，独立 conv 级开关；ADR-0019） ===
+    # 字段名沿用 analyze_emotion，但语义已扩为整套"情感感知系统"的开关：
+    # 情绪 + 好感度合并为 node_post_process 里的一次 assess_turn 上下文感知调用。
+    # 关闭后：跳过 assess_turn（省 LLM 调用），不写 EmotionRecord、不更新 mood、不更新好感度。
+    # 注意：这是"写路径"开关；"读路径"（把关系状态注入 prompt）由 relationship
+    # template block 另行 gate，与本开关正交（详见 ADR-0019 门控模型）。
     analyze_emotion: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
     )

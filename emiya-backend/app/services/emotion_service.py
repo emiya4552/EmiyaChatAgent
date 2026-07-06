@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""情绪引擎核心：prompt-based 情绪分析 + 加权滑动平均状态机。"""
+"""情感感知核心：情绪 + 好感度合并评估（assess_turn，ADR-0019）+ 加权滑动平均状态机。"""
 import json
 import logging
 import re
+from dataclasses import dataclass
 
 from app.config import settings
-from app.schemas.emotion import EmotionAnalysisResult
 from app.services.llm_service import call_deepseek_non_stream
+from app.utils.token_counter import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -15,34 +16,6 @@ EMOTION_LABELS = [
     "开心", "平静", "低落", "焦虑", "愤怒",
     "兴奋", "疲惫", "困惑", "感动", "思念",
 ]
-
-# 每种情绪的 emoji 映射
-EMOTION_EMOJI = {
-    "开心": "😊", "平静": "😌", "低落": "😔",
-    "焦虑": "😰", "愤怒": "😤", "兴奋": "🤩",
-    "疲惫": "😴", "困惑": "🤔", "感动": "🥹", "思念": "💭",
-}
-
-# 情绪分析 prompt 模板
-EMOTION_ANALYSIS_PROMPT = """请分析以下用户消息的情绪，仅返回 JSON，不要有任何其他内容：
-
-用户消息：{user_message}
-
-返回格式：
-{{
-  "emotion": "低落",
-  "intensity": 7,
-  "confidence": 0.85,
-  "triggers": ["考试", "没考好"]
-}}
-
-情绪标签必须从以下选择：{emotion_labels}
-
-注意：
-- emotion 必须是列表中的值，不能是其他
-- intensity 是 0-10 的整数
-- confidence 是 0-1 之间的浮点数
-- triggers 是触发该情绪的关键词列表，可以为空数组"""
 
 
 def _safe_parse_emotion_json(text: str) -> dict:
@@ -72,154 +45,210 @@ def _safe_parse_emotion_json(text: str) -> dict:
     return {"emotion": "平静", "intensity": 5, "confidence": 0.3, "triggers": []}
 
 
-async def analyze_emotion(user_message: str) -> EmotionAnalysisResult:
-    """调用 DeepSeek API 分析用户消息的情绪。
+@dataclass
+class TurnAssessment:
+    """一次互动的合并感知结果（ADR-0019）：用户情绪 + 角色好感变化。"""
+
+    emotion: str
+    intensity: int
+    confidence: float
+    triggers: list[str]
+    affinity_delta: int
+    affinity_reason: str
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """把文本裁到 max_tokens 以内（token 估算，比字符截断更贴合成本）。"""
+    if max_tokens <= 0 or not text:
+        return ""
+    if count_tokens(text) <= max_tokens:
+        return text
+    # 先按 token 比例砍字符，再收敛几步（count_tokens 是估算，不追求精确）
+    approx = max(1, int(len(text) * max_tokens / max(count_tokens(text), 1)))
+    t = text[:approx]
+    while t and count_tokens(t) > max_tokens:
+        t = t[: max(1, int(len(t) * 0.9))]
+    return t
+
+
+def _build_budgeted_dialogue(
+    messages: list[tuple[str, str]], max_tokens: int, max_messages: int
+) -> str:
+    """从最新往回按 token 预算累加最近对话，**最新消息优先**。
 
     Args:
-        user_message: 用户输入的消息文本。
+        messages: [(role, content), ...]，时间正序（旧 → 新）。
+        max_tokens: 总 token 预算。
+        max_messages: 防呆上限（token 预算才是主控）。
 
-    Returns:
-        EmotionAnalysisResult 对象，解析失败时返回默认值。
+    单条最新消息超预算时截断入选，保证本轮用户消息一定进得来。
     """
-    prompt = EMOTION_ANALYSIS_PROMPT.format(
-        user_message=user_message,
-        emotion_labels="/".join(EMOTION_LABELS),
-    )
-
-    messages = [{"role": "user", "content": prompt}]
-
-    try:
-        response = await call_deepseek_non_stream(
-            messages=messages,
-            temperature=settings.EMOTION_TEMPERATURE,
-            max_tokens=settings.EMOTION_MAX_TOKENS,
-        )
-        logger.debug(f"情绪分析原始响应: {response[:200]}")
-
-        data = _safe_parse_emotion_json(response)
-
-        # 验证 emotion 标签
-        if data.get("emotion") not in EMOTION_LABELS:
-            data["emotion"] = "平静"
-
-        # 验证 intensity 范围
-        intensity = data.get("intensity", 5)
-        if not isinstance(intensity, (int, float)) or intensity < 0 or intensity > 10:
-            data["intensity"] = 5
-
-        # 验证 confidence 范围
-        confidence = data.get("confidence", 0.3)
-        if not isinstance(confidence, (int, float)) or confidence < 0 or confidence > 1:
-            data["confidence"] = 0.3
-
-        return EmotionAnalysisResult(
-            emotion=data["emotion"],
-            intensity=int(data["intensity"]),
-            confidence=float(data["confidence"]),
-            triggers=data.get("triggers", []),
-        )
-    except Exception as e:
-        logger.error(f"情绪分析失败，使用默认值。错误: {e}")
-        return EmotionAnalysisResult(
-            emotion="平静",
-            intensity=5,
-            confidence=0.3,
-            triggers=[],
-        )
+    picked: list[str] = []
+    used = 0
+    for role, content in reversed(messages):  # 最新优先
+        if len(picked) >= max_messages:
+            break
+        line = f"{'用户' if role == 'user' else '你'}：{(content or '').strip()}"
+        t = count_tokens(line)
+        if used + t <= max_tokens:
+            picked.append(line)
+            used += t
+        else:
+            remaining = max_tokens - used
+            if not picked and remaining > 0:  # 最新一条即便超预算也截断入选
+                picked.append(_truncate_to_tokens(line, remaining))
+            break
+    return "\n".join(reversed(picked))  # 还原为时间正序
 
 
-AFFINITY_EVAL_PROMPT = """你正在扮演一个 AI 角色。请以这个角色的第一人称视角，判断当前这次互动让你对用户的感受发生了什么变化。
-
-你的角色设定：
-- 性格：{personality}
-- 说话风格：{speaking_style}
-
-当前对话：
-- 用户说：{user_message}
-- 用户的情绪状态：{emotion}（强度 {intensity}/10）
-- 你（作为这个角色）回复了：{assistant_reply}
-
-当前你们的好感度：{affinity_score}/100
-
-请判断这次互动让你对这个用户的感受：
-返回 JSON：{{"affinity_delta": N, "affinity_reason": "以第一人称简述原因（15字以内）"}}
-N 为正表示好感上升（用户让你更愿意交流了），为负表示下降，0 表示无变化。
-N 必须在 -3 到 +3 之间（含）。
-
-判断标准 - 升好感（+）：
-- 用户真诚地分享个人经历、情感或脆弱面
-- 用户尊重你表达的边界和偏好
-- 用户对对话投入、追问、展现真实兴趣
-- 用户积极回应你的关怀与引导
-
-判断标准 - 降好感（-）：
-- 用户反复踩你已明确表达过的不适话题
-- 用户全程敷衍（"嗯""哦""随便"）
-- 用户对你的善意表露冷漠、攻击或嘲讽
-
-注意：
-- 情绪分析和好感评估是两项独立任务
-- 你的回复约束是回复行为规范，不是用户好感评判标准
-- 只返回 JSON，不要其他内容"""
-
-
-async def assess_affinity(
-    user_message: str,
-    emotion: str,
-    intensity: int,
+async def assess_turn(
+    *,
+    recent_messages: list[tuple[str, str]],
     assistant_reply: str,
-    personality: str,
-    speaking_style: str,
+    persona_name: str,
+    persona_desc: str,
+    scenario: str,
     affinity_score: float,
-) -> tuple[int, str]:
-    """调用 LLM 评估本轮对话的好感度变动。
+    assess_affinity: bool,
+) -> TurnAssessment:
+    """ADR-0019：一次 LLM 调用同时判断用户情绪 + 角色好感变化（上下文感知）。
+
+    合并了旧的 `analyze_emotion`（裸情绪、无上下文）与 `assess_affinity`（好感度）。
+    输入按 token 预算裁剪（config `EMOTION_*_MAX_TOKENS`），近期对话最新优先。
+
+    人设可缺失（高版本卡人设常在世界书里、`personality`/`background` 都可能空）：
+    此时不写"性格：（无）"，而是提示模型从角色自己的这条回复推断态度——回复即角色行为。
+    `assess_affinity=False`（无 AI 角色）时只判情绪，好感 delta 记 0。
 
     Args:
-        user_message: 用户消息
-        emotion: 用户情绪标签
-        intensity: 情绪强度 0-10
-        assistant_reply: AI 角色本轮的回复
-        personality: persona 的性格描述
-        speaking_style: persona 的说话风格
-        affinity_score: 当前好感度分数
+        recent_messages: [(role, content)]，时间正序；最后一条"用户"消息是情绪判断对象。
+        assistant_reply: 角色本轮刚写的回复（尚未落库，故单独传）。
+        persona_desc: 角色描述（personality 或 background 回退 + 说话风格），可为空。
+        affinity_score: 当前好感度分数，作为角色视角判断的基线。
 
     Returns:
-        (delta, reason): delta 范围 [-3, 3]，reason 为自然语言简述
+        TurnAssessment；解析失败一律返回默认值（不阻断主流程）。
     """
-    prompt = AFFINITY_EVAL_PROMPT.format(
-        personality=personality[:300],
-        speaking_style=speaking_style[:200],
-        user_message=user_message[:500],
-        emotion=emotion,
-        intensity=intensity,
-        assistant_reply=assistant_reply[:500],
-        affinity_score=round(affinity_score, 1),
-    )
+    dialogue = _build_budgeted_dialogue(
+        recent_messages,
+        settings.EMOTION_CONTEXT_MAX_TOKENS,
+        settings.EMOTION_CONTEXT_MAX_MESSAGES,
+    ) or "（无）"
+    reply = _truncate_to_tokens(assistant_reply or "", settings.EMOTION_REPLY_MAX_TOKENS)
 
+    persona_parts: list[str] = []
+    if persona_name:
+        persona_parts.append(f"名字：{persona_name}")
+    if persona_desc.strip():
+        persona_parts.append(f"人设：{persona_desc.strip()}")
+    if scenario.strip():
+        persona_parts.append(f"场景：{scenario.strip()}")
+    persona_block = _truncate_to_tokens(
+        "\n".join(persona_parts), settings.EMOTION_PERSONA_MAX_TOKENS
+    )
+    has_persona = bool(persona_block.strip())
+
+    labels = "/".join(EMOTION_LABELS)
+
+    if has_persona:
+        persona_section = f"你的角色设定：\n{persona_block}\n\n"
+        infer_note = ""
+    else:
+        persona_section = ""
+        infer_note = (
+            "（没有显式人设——你的性格与态度请从下面『你刚写的回复』里推断，"
+            "这条回复就是你这个角色的真实行为）\n\n"
+        )
+
+    affinity_block = ""
+    affinity_json = ""
+    if assess_affinity:
+        affinity_json = (
+            ',\n  "affinity_delta": 1,'
+            '\n  "affinity_reason": "以第一人称简述原因（15字内）"'
+        )
+        affinity_block = f"""
+当前你们的好感度：{round(affinity_score, 1)}/100
+
+同时判断"这次互动让你（作为这个角色）对用户的感受变化"：
+- affinity_delta 为 -3~+3 的整数（正=更愿意交流，负=下降，0=无变化）
+- 升好感：用户真诚分享 / 尊重你的边界 / 投入追问；降好感：反复踩雷 / 全程敷衍 / 冷漠攻击
+- affinity_reason 用角色第一人称，15 字内
+- 情绪分析与好感评估是两项独立判断，别互相污染
+"""
+
+    prompt = f"""你在扮演一个 AI 角色。请基于{"人设与" if has_persona else ""}最近对话完成分析，仅返回一个 JSON，不要任何其他内容。
+
+{persona_section}{infer_note}最近对话（最后一条"用户"消息是本轮要判断情绪的对象）：
+{dialogue}
+
+你（作为角色）刚回复了：
+{reply or "（无）"}
+{affinity_block}
+返回格式（仅 JSON）：
+{{
+  "emotion": "低落",
+  "intensity": 7,
+  "confidence": 0.85,
+  "triggers": ["考试"]{affinity_json}
+}}
+
+要求：
+- emotion 必须从这些标签里选一个：{labels}
+- intensity 是 0-10 的整数，confidence 是 0-1 之间的浮点数
+- 情绪要结合上下文判断，而不是只看字面（反讽、口是心非要能识别）
+- 只返回 JSON，不要其他文字"""
+
+    default = TurnAssessment("平静", 5, 0.3, [], 0, "")
     try:
         response = await call_deepseek_non_stream(
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=100,
+            temperature=settings.EMOTION_TEMPERATURE,
+            max_tokens=settings.EMOTION_ASSESS_MAX_TOKENS,
         )
-        data = _safe_parse_emotion_json(response)
-        delta = data.get("affinity_delta", 0)
-        reason = data.get("affinity_reason", "")
+    except Exception as e:
+        logger.warning(f"assess_turn LLM 调用失败，使用默认值: {e}")
+        return default
 
-        # 硬 clamp ±3
-        if not isinstance(delta, (int, float)):
-            delta = 0
-        delta = max(-3, min(3, int(delta)))
+    data = _safe_parse_emotion_json(response)
 
-        if not isinstance(reason, str) or not reason:
+    emotion = data.get("emotion")
+    if emotion not in EMOTION_LABELS:
+        emotion = "平静"
+    intensity = data.get("intensity", 5)
+    if not isinstance(intensity, (int, float)) or intensity < 0 or intensity > 10:
+        intensity = 5
+    confidence = data.get("confidence", 0.3)
+    if not isinstance(confidence, (int, float)) or confidence < 0 or confidence > 1:
+        confidence = 0.3
+    triggers = data.get("triggers", [])
+    if not isinstance(triggers, list):
+        triggers = []
+
+    delta = 0
+    reason = ""
+    if assess_affinity:
+        raw_delta = data.get("affinity_delta", 0)
+        if not isinstance(raw_delta, (int, float)):
+            raw_delta = 0
+        delta = max(-3, min(3, int(raw_delta)))
+        raw_reason = data.get("affinity_reason", "")
+        reason = raw_reason if isinstance(raw_reason, str) else ""
+        if not reason:
             reason = "互动中" if delta == 0 else ("好感上升" if delta > 0 else "好感下降")
 
-        logger.info(f"亲和评估: delta={delta:+d}, reason={reason}")
-        return delta, reason
-
-    except Exception as e:
-        logger.warning(f"亲和评估失败，使用默认值: {e}")
-        return 0, ""
+    logger.info(
+        f"assess_turn: emotion={emotion}({int(intensity)}), "
+        f"affinity_delta={delta:+d} ({'on' if assess_affinity else 'off'})"
+    )
+    return TurnAssessment(
+        emotion=emotion,
+        intensity=int(intensity),
+        confidence=float(confidence),
+        triggers=triggers,
+        affinity_delta=delta,
+        affinity_reason=reason,
+    )
 
 
 class MoodStateMachine:

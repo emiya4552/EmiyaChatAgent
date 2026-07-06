@@ -144,20 +144,9 @@ async def process_chat(
             for node_name, node_output in chunk.items():
                 final_state.update(node_output)
 
-                if node_name == "analyze_emotion":
-                    # 关闭情绪分析时 node 内部已 short-circuit 返回默认值，
-                    # 这里同步不发 SSE（前端 emoji 也不会更新）
-                    if conversation.analyze_emotion:
-                        emotion_data = {
-                            "emotion": node_output.get("emotion") or "平静",
-                            "intensity": node_output.get("emotion_intensity", 5),
-                            "confidence": node_output.get("emotion_confidence", 0.3),
-                            "triggers": node_output.get("emotion_triggers", []),
-                        }
-                        yield f"event: emotion\ndata: {json.dumps(emotion_data, ensure_ascii=False)}\n\n"
-                        await _broadcast(conversation_id, "emotion", emotion_data)
-
-                elif node_name == "retrieve_memories":
+                # ADR-0019：情绪已后置到 node_post_process，不再在分析阶段发 emotion SSE；
+                # 情绪随 message_done 透出（见下方 msg_done_data["emotion"]）。
+                if node_name == "retrieve_memories":
                     recalled = node_output.get("recalled_memories") or []
                     if recalled:
                         yield f"event: memory_recall\ndata: {json.dumps({'memories': recalled}, ensure_ascii=False)}\n\n"
@@ -396,6 +385,11 @@ async def process_chat(
     }
     if affinity_score is not None:
         msg_done_data["affinity_score"] = affinity_score
+    # ADR-0019：情绪后置到 post_process，随 message_done 透出（emoji 在回合结束时更新）
+    _emotion = post_result.get("emotion")
+    if _emotion:
+        msg_done_data["emotion"] = _emotion
+        msg_done_data["emotion_intensity"] = post_result.get("emotion_intensity", 5)
     # 把最新 conv 变量透出来，前端 ConfigPanel「对话状态变量」实时刷新
     # （MVU 写回后 conv.variables 已更新，不传则前端要等手动 refetch 才看到）
     mvu_scope = final_state.get("mvu_scope") or {}

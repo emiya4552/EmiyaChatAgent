@@ -37,7 +37,7 @@ def _render_content(content: str, scope: dict | None) -> str:
 
 from app.services.emotion_service import (
     MoodStateMachine,
-    analyze_emotion,
+    assess_turn,
 )
 from app.services.memory.chroma_client import search_memories
 from app.services.memory.extraction import rewrite_query_for_retrieval
@@ -88,43 +88,9 @@ def _block_enabled(state: ChatState, key: str) -> bool:
     return key in blocks
 
 
-async def node_analyze_emotion(state: ChatState) -> dict:
-    """分析用户消息的情绪，写入 DB 并更新状态机。
-
-    功能开关：conv.analyze_emotion=False 时跳过 LLM 调用，
-    返回默认"平静"值（affinity 评估等下游用作占位）。
-    """
-    # 读 conv.analyze_emotion 决定是否跳过
-    try:
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Conversation.analyze_emotion).where(
-                    Conversation.id == state["conversation_id"]
-                )
-            )
-            enabled = result.scalar_one_or_none()
-            if enabled is False:
-                return {
-                    "emotion": "平静",
-                    "emotion_intensity": 5,
-                    "emotion_confidence": 0.3,
-                    "emotion_triggers": [],
-                }
-    except Exception:
-        # 读取失败按启用处理
-        pass
-
-    try:
-        result = await analyze_emotion(state["user_message"])
-        return {
-            "emotion": result.emotion,
-            "emotion_intensity": result.intensity,
-            "emotion_confidence": result.confidence,
-            "emotion_triggers": result.triggers,
-        }
-    except Exception as e:
-        logger.warning(f"情绪分析节点异常: {e}")
-        return {"emotion": "平静", "emotion_intensity": 5, "emotion_confidence": 0.3, "emotion_triggers": []}
+# ADR-0019：情绪分析已从"回复前独立节点"合并进 node_post_process 的感知段（与好感度
+# 评估合一、上下文感知）。原 node_analyze_emotion 已删；情绪现由 assess_turn 在回复后产出，
+# 随 message_done 透出给前端更新 emoji。感知总开关仍是 conv.analyze_emotion（现覆盖情绪+好感度）。
 
 
 async def node_retrieve_memories(state: ChatState) -> dict:
@@ -1168,16 +1134,94 @@ async def node_post_process(state: ChatState) -> dict:
                     conv_for_pipeline.title = msg[:30] + ("..." if len(msg) > 30 else "")
                     db.add(conv_for_pipeline)
 
-        # 检查 conv.analyze_emotion；关闭则不写 EmotionRecord、不更新 mood
-        try:
-            conv_check_result = await db.execute(
-                select(Conversation.analyze_emotion).where(Conversation.id == conv_id)
-            )
-            emotion_enabled = conv_check_result.scalar_one_or_none()
-            if emotion_enabled is None:
-                emotion_enabled = True
-        except Exception:
-            emotion_enabled = True
+        # ADR-0019：感知总开关，直接读已加载的 conv（省一次查询）；conv 缺失 → False（fail-safe）
+        emotion_enabled = bool(conv_for_pipeline and conv_for_pipeline.analyze_emotion)
+
+        # ── ADR-0019：情感感知（情绪 + 好感度合并为一次上下文感知调用）──
+        # 写路径由 conv.analyze_emotion（"情感分析"感知总开关）gate：关则整段跳过——
+        # 不写 EmotionRecord、好感度也不动。读路径（把关系注入 prompt）由 relationship
+        # template block 另行 gate，与本段正交（详见 ADR-0019）。
+        turn_delta: int = 0
+        turn_reason: str = ""
+        _perc_persona_id = state.get("persona_id")
+
+        if emotion_enabled:
+            _user_msg_text = (state.get("user_message") or "").strip()
+            if len(_user_msg_text) <= settings.EMOTION_SKIP_TRIVIAL_CHARS:
+                # 低信号轮（"嗯""哦"等填充消息）：不调 LLM，记"平静"、好感度不动（ADR-0019）
+                state["emotion"] = "平静"
+                state["emotion_intensity"] = 5
+                state["emotion_confidence"] = 0.3
+                state["emotion_triggers"] = []
+                logger.info(
+                    "情感感知：用户消息过短(%d<=%d)，跳过 assess_turn",
+                    len(_user_msg_text), settings.EMOTION_SKIP_TRIVIAL_CHARS,
+                )
+            elif (state.get("assistant_reply") or "").strip():
+                try:
+                    from app.models.relationship import Relationship
+                    per = None
+                    if _perc_persona_id:
+                        _per_result = await db.execute(
+                            select(Persona).where(Persona.id == _perc_persona_id)
+                        )
+                        per = _per_result.scalar_one_or_none()
+
+                    recent_result = await db.execute(
+                        select(Message)
+                        .where(
+                            Message.conversation_id == conv_id,
+                            Message.role.in_(("user", "assistant")),
+                        )
+                        .order_by(Message.created_at.desc())
+                        .limit(settings.EMOTION_CONTEXT_MAX_MESSAGES)
+                    )
+                    recent_msgs = list(reversed(recent_result.scalars().all()))
+                    recent_messages = [(m.role, m.content or "") for m in recent_msgs]
+
+                    # ADR-0019：好感度门槛放宽为"有 AI 角色即评"（高版本卡人设在世界书里、
+                    # personality/background 都可能空——assess_turn 会从回复推断角色态度）。
+                    want_affinity = bool(_perc_persona_id)
+                    cur_affinity = 0.0
+                    if want_affinity:
+                        # 轻量读当前好感度当 prompt 基线（不建行、不加锁；建/锁/写在下方 affinity 段）
+                        _aff = await db.execute(
+                            select(Relationship.affinity_score).where(
+                                Relationship.user_id == user_id,
+                                Relationship.persona_id == _perc_persona_id,
+                                Relationship.user_persona_id == state.get("user_persona_id"),
+                            )
+                        )
+                        cur_affinity = _aff.scalar_one_or_none() or 0.0
+
+                    persona_desc = ""
+                    if per:
+                        _main = (per.personality or per.background or "").strip()
+                        _style = (_cd(per, "speaking_style") or "").strip()
+                        _dparts = []
+                        if _main:
+                            _dparts.append(_main)
+                        if _style:
+                            _dparts.append(f"说话风格：{_style}")
+                        persona_desc = "\n".join(_dparts)
+
+                    ta = await assess_turn(
+                        recent_messages=recent_messages,
+                        assistant_reply=state.get("assistant_reply") or "",
+                        persona_name=(per.name if per else ""),
+                        persona_desc=persona_desc,
+                        scenario=((getattr(per, "scenario", None) if per else None) or ""),
+                        affinity_score=cur_affinity,
+                        assess_affinity=want_affinity,
+                    )
+                    state["emotion"] = ta.emotion
+                    state["emotion_intensity"] = ta.intensity
+                    state["emotion_confidence"] = ta.confidence
+                    state["emotion_triggers"] = ta.triggers
+                    turn_delta = ta.affinity_delta
+                    turn_reason = ta.affinity_reason
+                except Exception:
+                    logger.exception("情感感知 assess_turn 失败，退化为默认值")
 
         if emotion_enabled:
             try:
@@ -1190,10 +1234,11 @@ async def node_post_process(state: ChatState) -> dict:
                 if user_msg:
                     emotion_record = EmotionRecord(
                         message_id=user_msg.id, conversation_id=conv_id,
-                        emotion=state.get("emotion", "平静"),
-                        intensity=state.get("emotion_intensity", 5),
-                        confidence=state.get("emotion_confidence", 0.3),
-                        triggers=state.get("emotion_triggers", []),
+                        # state["emotion"] 初始为 None；assess_turn 未跑/失败时回退"平静"（ADR-0019）
+                        emotion=state.get("emotion") or "平静",
+                        intensity=state.get("emotion_intensity") or 5,
+                        confidence=state.get("emotion_confidence") or 0.3,
+                        triggers=state.get("emotion_triggers") or [],
                     )
                     db.add(emotion_record)
 
@@ -1217,9 +1262,9 @@ async def node_post_process(state: ChatState) -> dict:
                             for r in reversed(recent_records)
                         ]
                         new_mood, new_intensity = sm.update(
-                            state.get("emotion", "平静"),
-                            state.get("emotion_intensity", 5),
-                            state.get("emotion_confidence", 0.3),
+                            state.get("emotion") or "平静",
+                            state.get("emotion_intensity") or 5,
+                            state.get("emotion_confidence") or 0.3,
                         )
                         conv.current_mood = new_mood
                         conv.mood_intensity = new_intensity
@@ -1265,14 +1310,8 @@ async def node_post_process(state: ChatState) -> dict:
             try:
                 from datetime import datetime as dt
                 from app.services.relationship_service import get_or_create_relationship, update_affinity
-                from app.services.emotion_service import assess_affinity
 
                 user_persona_id = state.get("user_persona_id")
-
-                persona_result = await db.execute(
-                    select(Persona).where(Persona.id == persona_id)
-                )
-                per = persona_result.scalar_one_or_none()
 
                 rel = await get_or_create_relationship(
                     db, str(user_id), str(persona_id),
@@ -1280,19 +1319,11 @@ async def node_post_process(state: ChatState) -> dict:
                     for_update=True,
                 )
 
-                if per and per.personality:
-                    delta, reason = await assess_affinity(
-                        user_message=state["user_message"],
-                        emotion=state.get("emotion", "平静"),
-                        intensity=state.get("emotion_intensity", 5),
-                        assistant_reply=state["assistant_reply"],
-                        personality=per.personality,
-                        speaking_style=_cd(per, 'speaking_style') or "",
-                        affinity_score=rel.affinity_score,
-                    )
+                # ADR-0019：好感度写入随"情感分析"感知开关一起 gate（不再仅看 persona.personality）。
+                # delta/reason 来自本轮合并的 assess_turn（perception 段），不再单独调 assess_affinity。
+                delta, reason = turn_delta, turn_reason
+                if delta != 0 or reason:
                     await update_affinity(db, rel, delta, reason)
-                else:
-                    delta, reason = 0, ""
 
                 rel.total_messages = (rel.total_messages or 0) + 1
                 rel.last_interaction = dt.utcnow()
@@ -1393,6 +1424,11 @@ async def node_post_process(state: ChatState) -> dict:
             "affinity_delta": affinity_delta_out,
             "affinity_reason": affinity_reason_out,
             "affinity_score": affinity_score_out,
+            # ADR-0019：情绪后置到本节点，随 message_done 透出给前端更新 emoji
+            "emotion": state.get("emotion"),
+            "emotion_intensity": state.get("emotion_intensity"),
+            "emotion_confidence": state.get("emotion_confidence"),
+            "emotion_triggers": state.get("emotion_triggers"),
         }
 
 

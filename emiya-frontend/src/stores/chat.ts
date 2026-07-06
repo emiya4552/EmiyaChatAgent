@@ -247,6 +247,10 @@ export const useChatStore = defineStore('chat', () => {
         if (data?.mvu_runtime_view) {
           mvuRuntimeView.value = data.mvu_runtime_view as import('../types').MvuRuntimeView
         }
+        // ADR-0019：情绪随 message_done 到达（emoji 在回合结束时更新，替代旧的回复前 emotion SSE）
+        if (data?.emotion) {
+          convStore.setMood(data.emotion, data.emotion_intensity ?? 5)
+        }
         if (data?.new_memories) {
           convStore.setNewMemoriesCount(data.new_memories)
         }
@@ -281,9 +285,6 @@ export const useChatStore = defineStore('chat', () => {
             aiMsg.content = (aiMsg.content || '') + '[流式中断]'
           }
         }
-      },
-      onEmotion(emotion) {
-        convStore.setMood(emotion.emotion, emotion.intensity)
       },
       onMemoryRecall(memories) {
         convStore.setRecalledMemories(memories)
@@ -372,10 +373,11 @@ export const useChatStore = defineStore('chat', () => {
         if (data?.mvu_browser_sync) {
           void handleMvuBrowserSync(conversationId, data.mvu_browser_sync, data.message_id)
         }
+        // ADR-0019：情绪随 message_done 到达
+        if (data?.emotion) {
+          convStore.setMood(data.emotion, data.emotion_intensity ?? 5)
+        }
         liveAiMsgId = null
-      },
-      onEmotion(emotion) {
-        convStore.setMood(emotion.emotion, emotion.intensity)
       },
       onMemoryRecall(memories) {
         convStore.setRecalledMemories(memories)

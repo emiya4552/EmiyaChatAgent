@@ -22,9 +22,19 @@ class Settings(BaseSettings):
     # 超出由 LLM 端强制截断。
     CHAT_MAX_TOKENS: int = 20000
 
-    # === LLM 参数 — 情绪分析 ===
+    # === LLM 参数 — 情感感知（情绪+好感度合并调用，ADR-0019） ===
     EMOTION_TEMPERATURE: float = 0.1
-    EMOTION_MAX_TOKENS: int = 150
+    # assess_turn 的输入按 token 预算裁剪（而非固定字符截断），避免长 RP 消息被一刀切；
+    # 近期对话从最新往回累加，最新消息优先。
+    EMOTION_ASSESS_MAX_TOKENS: int = 250       # 输出 JSON 上限
+    EMOTION_CONTEXT_MAX_TOKENS: int = 10000      # 近期对话输入预算（token，最新优先累加）
+    EMOTION_CONTEXT_MAX_MESSAGES: int = 12     # 近期对话最多带几条（防呆上限，token 预算才是主控）
+    EMOTION_REPLY_MAX_TOKENS: int = 1000        # AI 回复输入预算（好感度关键输入，给厚一点）
+    EMOTION_PERSONA_MAX_TOKENS: int = 1000      # 人设 + 场景输入预算（可为空——高版本卡人设在世界书里）
+    # 用户消息去空白后短于此长度 → 跳过整次感知调用（省 token/去噪；"嗯""哦"这类填充轮）。
+    # 注意中文很"密"：3-4 字常已很有情绪（"我爱你"/"对不起"/"我好累"），阈值设 2 表示只跳
+    # 单字/空消息，是保守安全值；调高会误伤有意义的短消息，慎调。
+    EMOTION_SKIP_TRIVIAL_CHARS: int = 2
 
     # === LLM 参数 — 摘要压缩 ===
     SUMMARY_TEMPERATURE: float = 0.3
