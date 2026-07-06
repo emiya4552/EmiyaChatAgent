@@ -215,9 +215,9 @@
 
       <n-collapse-item title="功能开关" name="features">
         <div class="params-grid">
-          <n-form-item label="情绪分析" label-placement="left">
+          <n-form-item label="情感分析" label-placement="left">
             <n-switch v-model:value="togglesLocal.analyze_emotion" />
-            <span class="switch-hint">关闭后跳过每轮情绪 LLM 调用（不写 EmotionRecord / 不更新 mood / SSE emotion 不发）；前端 mood emoji 和趋势图也不再更新</span>
+            <span class="switch-hint">感知系统总开关（ADR-0019）：情绪 + 好感度合并为回复后的一次上下文感知调用。关闭后跳过该调用——不写 EmotionRecord、不更新 mood/emoji、也不更新好感度。（"把关系告诉 AI"是另一回事，由模板的 relationship 块控制）</span>
           </n-form-item>
           <n-form-item label="卡界面危险能力" label-placement="left">
             <n-switch :value="mvuDangerousLocal" :loading="mvuCapSaving" @update:value="onToggleMvuDangerous" />

@@ -492,7 +492,6 @@ export interface ChatCallbacks {
   onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number }) => void
   onError: (error: string) => void
   onStop?: () => void
-  onEmotion?: (emotion: EmotionResult) => void
   onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
   onRelationshipChange?: (data: { level: number; level_name: string; affinity_score: number }) => void
   onMilestone?: (data: { key: string; name: string }) => void

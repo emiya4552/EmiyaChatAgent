@@ -1,5 +1,5 @@
 import api from './index'
-import type { EmotionResult, Message, MvuBrowserSync, WorldInfoActivated } from '../types'
+import type { Message, MvuBrowserSync, WorldInfoActivated } from '../types'
 
 // 获取对话消息（分页，按时间倒序）
 export async function fetchMessages(conversationId: string, limit = 200, offset = 0): Promise<Message[]> {
@@ -16,9 +16,8 @@ export function sendMessage(
   replyLength: string,
   callbacks: {
     onToken: (token: string) => void
-    onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number; variables?: Record<string, unknown>; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync }) => void
+    onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number; variables?: Record<string, unknown>; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; emotion?: string; emotion_intensity?: number }) => void
     onError: (error: string, partialMessageId?: string) => void
-    onEmotion?: (emotion: EmotionResult) => void
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
     onRelationshipChange?: (data: { level: number; level_name: string; affinity_score: number }) => void
     onMilestone?: (data: { key: string; name: string }) => void
@@ -72,9 +71,7 @@ export function sendMessage(
           try {
             const data = JSON.parse(dataMatch[1])
 
-            if (event === 'emotion') {
-              callbacks.onEmotion?.(data as EmotionResult)
-            } else if (event === 'memory_recall') {
+            if (event === 'memory_recall') {
               callbacks.onMemoryRecall?.(data.memories)
             } else if (event === 'message_delta') {
               callbacks.onToken(data.content)
@@ -114,8 +111,7 @@ export function watchLive(
   signal: AbortSignal,
   callbacks: {
     onToken: (token: string) => void
-    onDone: (data: { message_id: string; conversation_id: string; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync }) => void
-    onEmotion?: (emotion: EmotionResult) => void
+    onDone: (data: { message_id: string; conversation_id: string; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; emotion?: string; emotion_intensity?: number }) => void
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
     onError: () => void
   }
@@ -161,8 +157,6 @@ export function watchLive(
               callbacks.onToken(data.content)
             } else if (event === 'message_done') {
               callbacks.onDone(data)
-            } else if (event === 'emotion') {
-              callbacks.onEmotion?.(data as EmotionResult)
             } else if (event === 'memory_recall') {
               callbacks.onMemoryRecall?.(data.memories)
             } else if (event === 'error') {
