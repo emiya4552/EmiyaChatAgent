@@ -149,18 +149,3 @@ async def import_template(
     raise HTTPException(400, "导入请使用 POST /api/templates 创建并传入 blocks")
 
 
-@router.get("/{template_id}/export")
-async def export_template(
-    template_id: UUID,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    t = await template_service.get_template(db, template_id, user.id)
-    if t is None:
-        raise HTTPException(404, "模板不存在")
-    return {
-        "name": t.name,
-        "description": t.description,
-        "blocks": t.blocks,
-        "exported_at": None,
-    }

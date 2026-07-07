@@ -12,9 +12,8 @@ from app.database import get_db
 from app.models.conversation import Conversation
 from app.models.relationship import Relationship, RELATIONSHIP_LEVELS
 from app.models.user import User
-from app.schemas.relationship import MilestoneResponse, RelationshipResponse
+from app.schemas.relationship import RelationshipResponse
 from app.services.relationship_service import (
-    MILESTONE_DEFINITIONS,
     assess_relationship,
     get_or_create_relationship,
 )
@@ -52,30 +51,6 @@ async def get_relationship(
         days_span=assessment["days_span"],
         milestones=rel.milestones or [],
     )
-
-
-@router.get(
-    "/relationships/{persona_id}/milestones",
-    response_model=list[MilestoneResponse],
-)
-async def get_milestones(
-    persona_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """获取与某个人设的关系里程碑列表。"""
-    rel = await get_or_create_relationship(
-        db, str(current_user.id), persona_id
-    )
-
-    milestones = rel.milestones or []
-    return [
-        MilestoneResponse(
-            key=m,
-            name=MILESTONE_DEFINITIONS.get(m, m),
-        )
-        for m in milestones
-    ]
 
 
 @router.get(

@@ -194,17 +194,10 @@ async def node_activate_worldbook(state: ChatState) -> dict:
         # MVU 变量驱动扫描（ADR-0004，默认关闭）：白名单非空时把选定 stat_data 路径
         # 渲染成扫描文本，让当前变量驱动关键词激活。空 = 不做任何额外扫描。
         chat_cfg = conv.chat_config or {}
-        scan_paths = chat_cfg.get("mvu_scan_variable_paths") or settings.MVU_SCAN_VARIABLE_PATHS
-        extra_scan_text, mvu_scan_items = "", []
-        if scan_paths:
-            from app.services.mvu_runtime import build_mvu_scan_text
-            extra_scan_text, mvu_scan_items = build_mvu_scan_text(conv.variables or {}, scan_paths)
-
         activated = scan_worldbook(
             worldbooks=book_dicts,
             history_messages=history,
             chat_config=chat_cfg,
-            extra_scan_text=extra_scan_text,
         )
 
         # 序列化成可放入 state 的 dict
@@ -223,10 +216,10 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             }
             for ae in activated
         ]
-        return {"wi_activated": wi_activated, "mvu_scan_items": mvu_scan_items}
+        return {"wi_activated": wi_activated}
     except Exception:
         logger.exception("世界书扫描失败，本轮不注入")
-        return {"wi_activated": [], "mvu_scan_items": []}
+        return {"wi_activated": []}
 
 
 async def _load_user_persona(state: ChatState) -> Persona | None:

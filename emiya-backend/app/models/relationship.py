@@ -68,8 +68,6 @@ class Relationship(Base):
     affinity_history: Mapped[list | None] = mapped_column(
         JSONB, default=list, nullable=True
     )
-    # 历史亲密度分数列，已不再读写；保留 DB 列以避免迁移
-    intimacy_score: Mapped[float] = mapped_column(Float, default=0.0)
     # 消息总数
     total_messages: Mapped[int] = mapped_column(Integer, default=0)
     # 深度对话次数

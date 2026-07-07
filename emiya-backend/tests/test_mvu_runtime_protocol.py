@@ -395,49 +395,6 @@ def test_build_runtime_view_includes_update_tool_meta():
     assert any("tool_calls=0" in d for d in view["diagnostics"])
 
 
-# ─── ADR-0004：变量驱动扫描（默认关闭 / 白名单） ───
-
-from app.services.mvu_runtime import build_mvu_scan_text  # noqa: E402
-from app.services.worldbook.scanner import scan_worldbook  # noqa: E402
-
-
-def test_build_mvu_scan_text_extracts_whitelisted_paths():
-    variables = {"stat_data": {"伶伶": {"当前情绪": "发情"}, "世界": {"当前地点": "书店"}}}
-
-    text, items = build_mvu_scan_text(variables, ["伶伶.当前情绪", "stat_data.世界.当前地点", "缺失.路径"])
-
-    assert "发情" in text and "书店" in text
-    by_path = {i["path"]: i for i in items}
-    assert by_path["伶伶.当前情绪"]["found"] is True
-    assert by_path["缺失.路径"]["found"] is False
-
-
-def test_build_mvu_scan_text_empty_paths_is_noop():
-    assert build_mvu_scan_text({"stat_data": {"a": 1}}, []) == ("", [])
-    assert build_mvu_scan_text({"stat_data": {"a": 1}}, None) == ("", [])
-
-
-def _book(entry):
-    return {"id": "1", "name": "b", "entries": [entry]}
-
-
-def test_scan_worldbook_variable_driven_activation_via_extra_scan_text():
-    # 一条 selective 条目，关键词"发情"；历史里没有该词，仅靠变量扫描文本激活
-    entry = {
-        "uid": 1, "comment": "发情反应", "content": "伶伶进入发情状态的描写",
-        "constant": False, "selective": True, "key": ["发情"], "enabled": True,
-    }
-    history = [{"role": "user", "content": "哦？"}]
-
-    # 无 extra_scan_text：不激活
-    assert scan_worldbook([_book(entry)], history, {}) == []
-
-    # 有 extra_scan_text（变量渲染出"当前情绪: 发情"）：激活
-    activated = scan_worldbook([_book(entry)], history, {}, extra_scan_text="伶伶.当前情绪: 发情")
-    assert len(activated) == 1
-    assert activated[0].entry["uid"] == 1
-
-
 # ─── ADR-0005：更新校验核心 + 约束提取 ───
 
 from app.services.mvu_runtime import (  # noqa: E402

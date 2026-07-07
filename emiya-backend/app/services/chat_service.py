@@ -398,7 +398,6 @@ async def process_chat(
     from app.services.mvu_runtime import build_runtime_view
     msg_done_data["mvu_runtime_view"] = build_runtime_view(
         final_state.get("wi_activated"),
-        scan_items=final_state.get("mvu_scan_items"),
         update_diag=final_state.get("mvu_update_diag"),
         update_channel=final_state.get("mvu_update_channel"),
         update_meta=final_state.get("mvu_tool_meta"),

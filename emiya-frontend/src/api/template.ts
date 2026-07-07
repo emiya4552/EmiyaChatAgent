@@ -30,11 +30,6 @@ export async function duplicateTemplate(id: string): Promise<TemplateDetail> {
   return data
 }
 
-export async function exportTemplate(id: string): Promise<Record<string, any>> {
-  const { data } = await api.get(`/v1/templates/${id}/export`)
-  return data
-}
-
 // 拉内置默认模板的序列化（代码常量，非 DB 行）
 export async function fetchDefaultPreview(): Promise<{
   name: string
