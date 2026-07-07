@@ -128,6 +128,8 @@ export interface User {
   css_theme: string | null
   // 情感分析默认偏好：新建对话时 analyze_emotion 的初始值（详见 docs/adr/0020）
   default_analyze_emotion: boolean
+  // MVU 兼容总开关：off 时聊天把 MVU 卡当普通卡（详见 docs/card/0002）
+  mvu_compat_enabled: boolean
   created_at: string
 }
 
@@ -136,6 +138,7 @@ export interface UserUpdateRequest {
   avatar_url?: string | null
   css_theme?: string | null
   default_analyze_emotion?: boolean
+  mvu_compat_enabled?: boolean
 }
 
 export interface UserSession {

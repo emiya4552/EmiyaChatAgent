@@ -38,6 +38,7 @@ def build_analysis_graph() -> StateGraph:
     workflow.add_node("assess_relationship", node_assess_relationship)
     workflow.add_node("build_prompt", node_build_prompt)
 
+    # 检索记忆 -> 激活世界书 -> 解析人设片段 -> 解析约束 -> 好感度评估 -> 构建 prompt
     workflow.add_edge(START, "retrieve_memories")
     workflow.add_edge("retrieve_memories", "activate_worldbook")
     workflow.add_edge("activate_worldbook", "resolve_profile_section")

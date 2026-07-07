@@ -22,12 +22,16 @@ from app.services.ejs_engine import EJSEngine
 from app.services.macro_engine import MacroEngine
 
 
-def _render_content(content: str, scope: dict | None) -> str:
-    """EJS → MacroEngine 二阶段渲染（MVU 兼容，详见 ADR-0010）。"""
+def _render_content(content: str, scope: dict | None, run_ejs: bool = True) -> str:
+    """EJS → MacroEngine 二阶段渲染（MVU 兼容，详见 ADR-0010）。
+
+    run_ejs=False 时跳过 EJS（CARD-0002：MVU 兼容开关 off → EJS 属 MVU 机器，不跑）。
+    """
     if not content:
         return content
-    ejs_scope = (scope or {}).get("local") or {} if isinstance(scope, dict) else {}
-    content = EJSEngine.render(content, ejs_scope)
+    if run_ejs:
+        ejs_scope = (scope or {}).get("local") or {} if isinstance(scope, dict) else {}
+        content = EJSEngine.render(content, ejs_scope)
     return MacroEngine.render(content, scope)
 
 
@@ -156,7 +160,7 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             conv = conv_result.scalar_one_or_none()
             if conv is None:
                 return {"wi_activated": []}
-
+            # 获取世界书 ID 列表（conv.worldbook_ids 是 str[]，可能为空）
             wid_strs = list(conv.worldbook_ids or [])
             if not wid_strs:
                 return {"wi_activated": []}
@@ -191,7 +195,7 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             )
             history = [{"role": m.role, "content": m.content} for m in msgs_result.scalars().all()]
 
-        # MVU 变量驱动扫描（ADR-0004，默认关闭）：白名单非空时把选定 stat_data 路径
+        # MVU 变量驱动扫描：白名单非空时把选定 stat_data 路径
         # 渲染成扫描文本，让当前变量驱动关键词激活。空 = 不做任何额外扫描。
         chat_cfg = conv.chat_config or {}
         scan_paths = chat_cfg.get("mvu_scan_variable_paths") or settings.MVU_SCAN_VARIABLE_PATHS
@@ -637,10 +641,12 @@ async def node_build_prompt(state: ChatState) -> dict:
             max_context=cc.get("openai_max_context"),
         )
         truncated = _truncate_history(recent, max(budget, 100))
+        # CARD-0002：MVU 兼容总开关（账户级）。off 时跳过 EJS + 把 MVU 卡当普通卡。
+        _mvu_compat = state.get("mvu_compat_enabled", True)
         # 对 history 中每条消息跑宏（开场白/历史消息里可能含 {{user}}/{{char}}/变量宏）
         # 与 ST 对齐：history 不持久化渲染结果，每轮按当时 scope 重渲
         for h in truncated:
-            h["content"] = _render_content(h.get("content", ""), scope)
+            h["content"] = _render_content(h.get("content", ""), scope, run_ejs=_mvu_compat)
         history_start_idx = len(rendered)
         rendered.extend(truncated)
 
@@ -659,7 +665,7 @@ async def node_build_prompt(state: ChatState) -> dict:
                     insert_idx = len(rendered) - an_depth
                 rendered.insert(insert_idx, {
                     "role": an_role,
-                    "content": _render_content(conv.author_note, scope),
+                    "content": _render_content(conv.author_note, scope, run_ejs=_mvu_compat),
                     ANCHOR_KEY: ANCHOR_AUTHOR_NOTE,
                 })
 
@@ -669,13 +675,19 @@ async def node_build_prompt(state: ChatState) -> dict:
         # （state["wi_activated"] 不动，工具描述/诊断仍拿全量），并追加一句"用工具"引导。
         # 注意：`persona_uses_mvu` 要到本节点 return 时才写进 state，这里 state.get 拿不到；
         # 直接读本节点已加载的 persona 对象（见上文 persona = ... 处）。
-        mvu_update_divert_mode = bool(persona and getattr(persona, "uses_mvu", False))
+        # CARD-0002：**有效** MVU = persona.uses_mvu AND 账户 mvu_compat_enabled。
+        _persona_raw_mvu = bool(persona and getattr(persona, "uses_mvu", False))
+        mvu_update_divert_mode = _persona_raw_mvu and _mvu_compat
         if mvu_update_divert_mode and wi_activated:
             from app.services.mvu_runtime.runtime_view import classify_mvu_comment
             wi_activated = [
                 e for e in wi_activated
                 if classify_mvu_comment(e.get("comment")) != "update"
             ]
+        elif _persona_raw_mvu and not _mvu_compat and wi_activated:
+            # 兼容开关 off：把 MVU 卡当普通卡，主动剔除**全部** MVU 标签世界书条目
+            # （否则 [mvu_update]/[mvu_status] 等会当普通 lore 注入、漏"输出<UpdateVariable>"指令）
+            wi_activated = [e for e in wi_activated if not _is_mvu_tagged_entry(e)]
 
         # ── Worldbook 注入：按 8 个 position 分发 ──
         if wi_activated:
@@ -758,7 +770,9 @@ async def node_build_prompt(state: ChatState) -> dict:
             "messages": rendered,
             "system_prompt": rendered[0]["content"][:200] if rendered else "",
             "persona_name": persona.name if persona else None,
-            "persona_uses_mvu": bool(persona and getattr(persona, "uses_mvu", False)),
+            # CARD-0002：写**有效**值 = 原始 uses_mvu AND 账户兼容开关。下游所有 MVU 门控
+            # （run_update_pass / browser_sync / retire_apply / post_process ops）读它 → 自动尊重开关。
+            "persona_uses_mvu": _persona_raw_mvu and _mvu_compat,
             "is_first_round": is_first,
             "error": None,
             "mvu_scope": scope,

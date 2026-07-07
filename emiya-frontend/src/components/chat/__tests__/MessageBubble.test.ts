@@ -29,6 +29,7 @@ describe('MessageBubble', () => {
       avatar_url: '/static/avatars/users/user-1/avatar.png',
       css_theme: null,
       default_analyze_emotion: false,
+      mvu_compat_enabled: true,
       created_at: '2026-01-01T00:00:00Z',
     }
 

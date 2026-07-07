@@ -58,8 +58,12 @@ class ChatState(TypedDict):
     system_prompt: str
     messages: list[dict]
     persona_name: str | None
-    # MVU 标记：persona.uses_mvu 透传，chat_service 据此触发 <UpdateVariable> 续写兜底
+    # MVU 标记：**有效** uses_mvu = persona.uses_mvu AND user.mvu_compat_enabled
+    # （node_build_prompt 写入有效值，下游所有 MVU 门控读它 → 自动尊重兼容开关；CARD-0002）
     persona_uses_mvu: bool
+    # MVU 兼容总开关（账户级，chat_service 从 User 载入；CARD-0002）
+    # off 时 node_build_prompt 剔除 MVU 标签条目 + 跳过 EJS，并把 persona_uses_mvu 压成 False
+    mvu_compat_enabled: bool
     # MVU 变量作用域 — dual-bucket {"local","global","names"}（详见 docs/adr/0007）
     # 由 node_build_prompt 加载/产出，node_post_process 成功时写回 DB（幂等）
     mvu_scope: dict
