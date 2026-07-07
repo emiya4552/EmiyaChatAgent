@@ -2,7 +2,7 @@
 """用户 ORM 模型。"""
 import uuid
 
-from sqlalchemy import String, Text
+from sqlalchemy import Boolean, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,6 +36,13 @@ class User(Base, TimestampMixin):
     # === 用户级 CSS 主题（详见 docs/adr/0008） ===
     # 用户全局样式包，对该用户所有对话生效；Persona.css_theme 之后再注入
     css_theme: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # === 情感分析默认偏好（详见 docs/adr/0020） ===
+    # 仅决定**新建对话**时 Conversation.analyze_emotion 的初始值（创建时快照）。
+    # 默认 False → 感知系统 opt-in。改它不追溯已存在的对话、不覆盖手动选择。
+    default_analyze_emotion: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email})>"
