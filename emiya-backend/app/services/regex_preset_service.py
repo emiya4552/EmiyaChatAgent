@@ -158,49 +158,6 @@ async def import_regex_preset_json(
     return rp
 
 
-async def get_active_scripts(
-    db: AsyncSession, conversation_id: UUID, user_id: UUID
-) -> list[dict]:
-    """获取对话当前生效的正则脚本（promptOnly=false 部分，前端用）。
-
-    查询路径：conversation.regex_preset_id → RegexPreset.scripts
-    fallback：conversation.preset_id → Preset.regex_preset_id → RegexPreset.scripts
-    """
-    from app.models.conversation import Conversation
-
-    result = await db.execute(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.user_id == user_id,
-        )
-    )
-    conv = result.scalar_one_or_none()
-    if conv is None:
-        return []
-
-    regex_preset_id = conv.regex_preset_id
-    if regex_preset_id is None and conv.preset_id:
-        from app.models.preset import Preset
-        p_result = await db.execute(
-            select(Preset).where(Preset.id == conv.preset_id)
-        )
-        preset = p_result.scalar_one_or_none()
-        if preset:
-            regex_preset_id = preset.regex_preset_id
-
-    if regex_preset_id is None:
-        return []
-
-    rp = await get_regex_preset(db, regex_preset_id)
-    if rp is None:
-        return []
-
-    return [
-        s for s in rp.scripts
-        if not s.get("disabled", False) and not s.get("promptOnly", False)
-    ]
-
-
 async def get_prompt_only_scripts(
     db: AsyncSession, conv_regex_preset_id: UUID | None,
     preset_id: UUID | None,
