@@ -34,7 +34,6 @@ from app.services.conversation_service import (
 )
 from app.config import settings
 from app.services.mvu_runtime import describe_conversation_mvu_state
-from app.services.regex_preset_service import get_active_scripts
 from app.utils.exceptions import NotFoundException
 
 logger = logging.getLogger(__name__)
@@ -439,17 +438,6 @@ async def switch_greeting(
         content=msgs[0].content,
         display_content=msgs[0].display_content,
     )
-
-
-@router.get("/{conversation_id}/regex-scripts")
-async def get_conversation_regex_scripts(
-    conversation_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """获取对话当前生效的正则脚本（promptOnly=false，前端显示用）。"""
-    scripts = await get_active_scripts(db, conversation_id, current_user.id)
-    return {"scripts": scripts}
 
 
 @router.put("/{conversation_id}/worldbooks", response_model=ConversationResponse)

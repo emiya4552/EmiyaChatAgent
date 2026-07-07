@@ -1,5 +1,5 @@
 import api from './index'
-import type { Conversation, ChatConfig, RegexScript } from '../types'
+import type { Conversation, ChatConfig } from '../types'
 
 export async function fetchConversations(): Promise<Conversation[]> {
   const res = await api.get('/v1/conversations')
@@ -53,11 +53,6 @@ export async function updateConversationConfig(convId: string, chatConfig: ChatC
 export async function switchRegexPreset(convId: string, regexPresetId: string | null): Promise<Conversation> {
   const res = await api.put(`/v1/conversations/${convId}/regex-preset`, { regex_preset_id: regexPresetId })
   return res.data
-}
-
-export async function fetchRegexScripts(convId: string): Promise<RegexScript[]> {
-  const res = await api.get(`/v1/conversations/${convId}/regex-scripts`)
-  return res.data.scripts || []
 }
 
 /**

@@ -143,11 +143,6 @@ class Settings(BaseSettings):
     MVU_UPDATE_MAX_TOKENS: int = 1000
     MVU_UPDATE_FORCE_TOOL: bool = True
 
-    # MVU tool-calling 更新通道（ADR-0005，**默认关闭**灰度）：开启后对 uses_mvu 卡
-    # 在主调用里挂 update_variables 工具，单次返回 content + tool_call，post_process
-    # 里过同一校验层写 stat_data。文本 <UpdateVariable> 解析永远作为 fallback 保留。
-    MVU_TOOL_UPDATE_ENABLED: bool = False
-
     # MVU <UpdateVariable> 续写兜底（详见 ADR-0010）：
     # persona.uses_mvu=True 且主回复无 <UpdateVariable> 时，用 DeepSeek prefix
     # completion 强制续写状态变量 YAML 块。变量树可能很大，max_tokens 留 3000
