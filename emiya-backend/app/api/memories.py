@@ -52,24 +52,6 @@ async def list_memories(
     )
 
 
-@router.get("/memories/{memory_id}", response_model=MemoryResponse)
-async def get_memory(
-    memory_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """获取单条记忆详情。"""
-    m = await memory_service.get_memory(db, memory_id, current_user.id)
-    return MemoryResponse(
-        id=str(m.id), content=m.content, category=m.category,
-        importance=m.importance, reference_count=m.reference_count,
-        scope=m.scope, memory_type=m.memory_type,
-        source_conversation_id=str(m.source_conversation_id) if m.source_conversation_id else None,
-        extracted_at=m.extracted_at.isoformat(),
-        last_referenced_at=m.last_referenced_at.isoformat() if m.last_referenced_at else None,
-    )
-
-
 @router.put("/memories/{memory_id}", response_model=MemoryResponse)
 async def update_memory(
     memory_id: UUID,

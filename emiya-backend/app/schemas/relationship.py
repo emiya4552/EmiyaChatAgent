@@ -16,10 +16,3 @@ class RelationshipResponse(BaseModel):
     milestones: list[str] = Field(default_factory=list, description="已达成的里程碑")
     new_milestone: str | None = Field(None, description="本轮新达成的里程碑")
     level_changed: bool = Field(False, description="本轮是否升级")
-
-
-class MilestoneResponse(BaseModel):
-    """里程碑响应。"""
-    key: str = Field(..., description="里程碑键")
-    name: str = Field(..., description="里程碑中文名称")
-    achieved_at: str | None = Field(None, description="达成时间")

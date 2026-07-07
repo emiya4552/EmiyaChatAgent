@@ -50,9 +50,8 @@ class Settings(BaseSettings):
     CHROMA_HOST: str = "localhost"
     CHROMA_PORT: int = 8001
     # Embedding 配置
-    # "local" 默认尝试 BAAI/bge-large-zh-v1.5（需 pip install sentence-transformers）
-    # 若 sentence-transformers 不可用则回退到 ChromaDB 内置 all-MiniLM-L6-v2
-    EMBEDDING_PROVIDER: str = "local"
+    # 默认尝试 BAAI/bge-large-zh-v1.5（需 pip install sentence-transformers）；
+    # 不可用则回退到 ChromaDB 内置 all-MiniLM-L6-v2
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-large-zh-v1.5"
     # 记忆系统配置
     MEMORY_TOP_K: int = 5
@@ -71,8 +70,6 @@ class Settings(BaseSettings):
     # 去重与矛盾检测
     MEMORY_DEDUP_THRESHOLD: float = 0.75  # 相似度 ≥ 此值视为重复（原 0.85，放宽以提高提取量）
     ENABLE_CONTRADICTION_DETECTION: bool = True
-    # 好感度系统
-    AFFINITY_MAX_DELTA: int = 3  # 单轮好感度最大变动幅度（±）
 
     # === 数据库配置 ===
     DATABASE_URL: str
@@ -97,10 +94,6 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     SMTP_USE_SSL: bool = False
 
-    # === 应用配置 ===
-    APP_ENV: str = "development"
-    LOG_LEVEL: str = "INFO"
-
     # === Token Budget 配置 ===
     # token 预算安全边界，覆盖计数误差
     TOKEN_BUDGET_SAFETY_MARGIN: int = 2000
@@ -114,10 +107,6 @@ class Settings(BaseSettings):
     WORLDBOOK_BUDGET_CAP: int = 0
     # 预算超限时是否日志告警（前端目前不展示）
     WORLDBOOK_OVERFLOW_ALERT: bool = False
-    # AN 默认深度（倒数第几条消息之前）
-    WORLDBOOK_AN_DEFAULT_DEPTH: int = 4
-    # AN 默认间隔（每 N 轮插一次，1 = 每次都插）
-    WORLDBOOK_AN_DEFAULT_INTERVAL: int = 1
     # 尾部模板强制兜底：自动检测含 HTML 模板的激活条目，在 prompt 末端
     # 追加强制约束指令，压住预设的"严格格式"约束（如 <content></content>）
     # 详见 nodes.py::_detect_output_templates / _build_tail_template_directive
@@ -128,13 +117,6 @@ class Settings(BaseSettings):
     WORLDBOOK_TAIL_CONTINUATION_MAX: int = 3  # 每轮最多续写 K 个模板
     WORLDBOOK_TAIL_CONTINUATION_MAX_TOKENS: int = 800  # 单次续写 max_tokens
 
-    # MVU 变量驱动世界书扫描白名单（ADR-0004，WuWa 档，**默认关闭**）：
-    # 把选定的 stat_data 点路径渲染成扫描文本喂给世界书扫描器，让"带关键词的条目"
-    # 能被当前变量激活（近似 ST 里 calculateStoryLogic 注入 should_scan 触发器的效果，
-    # 但不执行任何卡内 JS，是尽力而为的替代）。空列表 = 关闭，不做任何额外扫描。
-    # 也可按对话覆盖：conv.chat_config["mvu_scan_variable_paths"]。
-    MVU_SCAN_VARIABLE_PATHS: list[str] = []
-
     # MVU double-ai update pass (ADR-0007): the main model writes narrative only,
     # then a second non-streaming tool call emits JSON Patch ops for stat_data.
     # Empty model means reuse DEEPSEEK_MODEL.
@@ -142,12 +124,6 @@ class Settings(BaseSettings):
     MVU_UPDATE_TEMPERATURE: float = 0.2
     MVU_UPDATE_MAX_TOKENS: int = 1000
     MVU_UPDATE_FORCE_TOOL: bool = True
-
-    # MVU <UpdateVariable> 续写兜底（详见 ADR-0010）：
-    # persona.uses_mvu=True 且主回复无 <UpdateVariable> 时，用 DeepSeek prefix
-    # completion 强制续写状态变量 YAML 块。变量树可能很大，max_tokens 留 3000
-    MVU_CONTINUATION_ENABLED: bool = True
-    MVU_CONTINUATION_MAX_TOKENS: int = 3000
 
     # MVU 浏览器运行时 down-channel（ADR-0008c 阶段1，**默认关闭**）：
     # 开启后，对 uses_mvu 卡在 message_done 里**附加** mvu_browser_sync = 本回合层1

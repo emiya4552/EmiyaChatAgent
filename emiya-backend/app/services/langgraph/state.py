@@ -32,8 +32,6 @@ class ChatState(TypedDict):
     # 世界书激活集（由 node_activate_worldbook 产出）
     # 每元素是 dataclass ActiveEntry 的 dict 化（uid/comment/content/position/depth/role/outlet_name/worldbook_id/worldbook_name）
     wi_activated: list[dict]
-    # MVU 变量驱动扫描（ADR-0004，默认关闭）参与匹配的路径诊断 [{path,found,value_preview}]
-    mvu_scan_items: list[dict]
     # MVU 更新通道（ADR-0005）：本次 LLM 累积的 tool_calls（chat_service 填），
     # 以及 post_process 产出的校验诊断与实际生效通道（供 mvu_runtime_view）
     mvu_tool_calls: list[dict]

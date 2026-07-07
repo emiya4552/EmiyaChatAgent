@@ -73,7 +73,6 @@ class Memory(Base):
 
     # 关联
     user: Mapped["User"] = relationship("User", backref="memories")
-    source_conversation: Mapped["Conversation | None"] = relationship("Conversation")
 
     def __repr__(self) -> str:
         return f"<Memory(id={self.id}, category={self.category}, importance={self.importance})>"

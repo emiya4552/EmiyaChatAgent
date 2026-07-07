@@ -390,11 +390,6 @@ export interface MvuRuntimeViewEntry {
   chars: number
   injected_as_prompt: boolean
 }
-export interface MvuScanItem {
-  path: string
-  found: boolean
-  value_preview: string
-}
 // ADR-0005：本轮更新校验诊断
 export interface MvuUpdateInfo {
   channel: 'tool' | 'text' | 'none'
@@ -416,7 +411,6 @@ export interface MvuRuntimeView {
   is_mvu: boolean
   counts: Record<string, number>
   entries: MvuRuntimeViewEntry[]
-  scan_items?: MvuScanItem[]
   update?: MvuUpdateInfo
   diagnostics: string[]
 }
@@ -463,13 +457,6 @@ export interface RegexPresetDetail {
 
 // ─── 情绪 ───
 
-export interface EmotionResult {
-  emotion: string
-  intensity: number
-  confidence: number
-  triggers: string[]
-}
-
 export interface EmotionRecord {
   id: string
   emotion: string
@@ -479,11 +466,6 @@ export interface EmotionRecord {
   created_at: string
 }
 
-export interface MoodState {
-  current_mood: string | null
-  mood_intensity: number | null
-}
-
 // ─── 认证 ───
 
 export interface LoginRequest { email: string; password: string }
@@ -491,20 +473,6 @@ export interface RegisterRequest { email: string; password: string; nickname: st
 export interface TokenResponse { access_token: string; token_type: string; user: User }
 export interface MessageResponse { message: string }
 
-// ─── 聊天 SSE ───
-
-export interface ChatCallbacks {
-  onToken: (content: string) => void
-  onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number }) => void
-  onError: (error: string) => void
-  onStop?: () => void
-  onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
-  onRelationshipChange?: (data: { level: number; level_name: string; affinity_score: number }) => void
-  onMilestone?: (data: { key: string; name: string }) => void
-  onProfileReminder?: (data: { message: string; link: string }) => void
-  onAffinityUpdate?: (data: { delta: number; reason: string; score: number }) => void
-  onWorldInfoActivated?: (data: WorldInfoActivated) => void
-}
 
 // ─── 记忆 ───
 
@@ -560,4 +528,3 @@ export interface Relationship {
   level_changed: boolean
 }
 
-export interface Milestone { key: string; name: string; achieved_at?: string }

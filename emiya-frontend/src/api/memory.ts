@@ -12,11 +12,6 @@ export async function fetchMemories(
   return res.data
 }
 
-export async function fetchMemory(id: string): Promise<Memory> {
-  const res = await api.get(`/v1/memories/${id}`)
-  return res.data
-}
-
 export async function updateMemory(id: string, data: MemoryUpdateRequest): Promise<Memory> {
   const res = await api.put(`/v1/memories/${id}`, data)
   return res.data
