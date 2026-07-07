@@ -107,6 +107,11 @@ async def create_conversation(
         seed_worldbook_ids = [str(x) for x in (ai_persona.default_worldbook_ids or [])]
     seed_author_note = ai_persona.author_note
 
+    # 感知系统默认偏好（ADR-0020）：新对话的 analyze_emotion 初始值来自账户级
+    # User.default_analyze_emotion（创建时快照，不追溯、不实时联动）。
+    creator = await db.get(User, user_id)
+    default_analyze_emotion = bool(creator.default_analyze_emotion) if creator else False
+
     import uuid as _uuid
     conversation = Conversation(
         id=_uuid.uuid4(),
@@ -116,6 +121,7 @@ async def create_conversation(
         regex_preset_id=effective_regex_preset_id,
         worldbook_ids=seed_worldbook_ids,
         author_note=seed_author_note,
+        analyze_emotion=default_analyze_emotion,
     )
     db.add(conversation)
 

@@ -59,20 +59,20 @@
       </div>
     </div>
 
-    <div v-if="convStore.currentMood" class="mood-indicator">
+    <div v-if="perceptionOn && convStore.currentMood" class="mood-indicator">
       <span class="mood-emoji">{{ moodEmoji }}</span>
       <span class="mood-label">{{ convStore.currentMood }}</span>
       <span class="mood-intensity">· 强度 {{ convStore.moodIntensity }}/10</span>
     </div>
 
     <RelationshipBar
-      v-if="currentConv"
+      v-if="currentConv && perceptionOn"
       ref="relationshipBarRef"
       :relationship="currentRelationship"
       :persona-name="currentConv.persona_name || ''"
     />
 
-    <MilestoneMessage :event="convStore.milestone" />
+    <MilestoneMessage v-if="perceptionOn" :event="convStore.milestone" />
 
     <MessageList :key="convStore.currentId ?? undefined" :messages="chatStore.messages" :persona-name="currentConv?.persona_name || ''" :persona-avatar-url="personaAvatarUrl" :greeting-nav="greetingNav" />
 
@@ -141,6 +141,11 @@ function setReplyLength(v: string) {
 const currentConv = computed(() =>
   convStore.list.find((c) => c.id === convStore.currentId) || null
 )
+
+// 感知系统开关（ADR-0020）：对话级 analyze_emotion 显式为 false 时，隐藏对话内的
+// mood/关系条/里程碑指示器。必须显式判 !== false —— 历史开过感知的对话 DB 里已存
+// current_mood/relationship 数据，只靠"有没有数据"判断会在关闭后仍露出指示器。
+const perceptionOn = computed(() => currentConv.value?.analyze_emotion !== false)
 
 // 当前对话使用的模板里 reply_length block 是否启用——derived 字段，由后端
 // _compute_reply_length_enabled 查模板算好（详见 ADR-0014）。

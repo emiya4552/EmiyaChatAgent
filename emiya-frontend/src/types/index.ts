@@ -126,6 +126,8 @@ export interface User {
   avatar_url: string | null
   // 用户级 CSS 主题（详见 docs/adr/0008）
   css_theme: string | null
+  // 情感分析默认偏好：新建对话时 analyze_emotion 的初始值（详见 docs/adr/0020）
+  default_analyze_emotion: boolean
   created_at: string
 }
 
@@ -133,6 +135,7 @@ export interface UserUpdateRequest {
   nickname?: string
   avatar_url?: string | null
   css_theme?: string | null
+  default_analyze_emotion?: boolean
 }
 
 export interface UserSession {

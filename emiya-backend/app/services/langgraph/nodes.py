@@ -1157,6 +1157,7 @@ async def node_post_process(state: ChatState) -> dict:
                     "情感感知：用户消息过短(%d<=%d)，跳过 assess_turn",
                     len(_user_msg_text), settings.EMOTION_SKIP_TRIVIAL_CHARS,
                 )
+            # 有用户消息且有 AI 回复时才调 LLM 感知（无用户消息或仅系统消息时不调）
             elif (state.get("assistant_reply") or "").strip():
                 try:
                     from app.models.relationship import Relationship
@@ -1179,12 +1180,12 @@ async def node_post_process(state: ChatState) -> dict:
                     recent_msgs = list(reversed(recent_result.scalars().all()))
                     recent_messages = [(m.role, m.content or "") for m in recent_msgs]
 
-                    # ADR-0019：好感度门槛放宽为"有 AI 角色即评"（高版本卡人设在世界书里、
+                    # 好感度门槛为"有 AI 角色即评"（高版本卡人设在世界书里、
                     # personality/background 都可能空——assess_turn 会从回复推断角色态度）。
                     want_affinity = bool(_perc_persona_id)
                     cur_affinity = 0.0
                     if want_affinity:
-                        # 轻量读当前好感度当 prompt 基线（不建行、不加锁；建/锁/写在下方 affinity 段）
+                        # 读当前好感度
                         _aff = await db.execute(
                             select(Relationship.affinity_score).where(
                                 Relationship.user_id == user_id,

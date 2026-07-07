@@ -83,6 +83,23 @@
           <n-divider />
 
           <div class="section">
+            <n-form-item label="新对话默认开启情感分析">
+              <n-switch
+                v-model:value="defaultAnalyzeEmotion"
+                :loading="savingPerceptionDefault"
+                @update:value="savePerceptionDefault"
+              />
+            </n-form-item>
+            <p class="hint">
+              情感分析（感知系统）会在每轮回复后额外调用一次 LLM，产出情绪 emoji 与好感度变化。
+              这里只设 <b>新建对话</b> 的默认值：关闭后新对话默认不开启，你仍可在每个对话的设置里单独开启；
+              已存在的对话不受影响。详见 ADR-0020。
+            </p>
+          </div>
+
+          <n-divider />
+
+          <div class="section">
             <h3 class="section-title">全局 CSS 主题</h3>
             <p class="hint">
               这里写的 CSS 对所有对话生效；角色卡自带样式会在全局样式之后注入，因此可以覆盖这里的规则。
@@ -296,6 +313,23 @@ const renderHtmlIframe = ref(isHtmlIframeRenderEnabled())
 const cssTheme = ref(user.value?.css_theme || '')
 const savingCssTheme = ref(false)
 const hasCssTheme = computed(() => !!cssTheme.value.trim())
+
+// 情感分析默认偏好（ADR-0020）：仅影响新建对话的默认开关，改动即时保存
+const defaultAnalyzeEmotion = ref(user.value?.default_analyze_emotion ?? false)
+const savingPerceptionDefault = ref(false)
+
+async function savePerceptionDefault(v: boolean) {
+  savingPerceptionDefault.value = true
+  try {
+    await authStore.updateMe({ default_analyze_emotion: v })
+    message.success(v ? '新对话将默认开启情感分析' : '新对话将默认关闭情感分析')
+  } catch (err: any) {
+    defaultAnalyzeEmotion.value = !v
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingPerceptionDefault.value = false
+  }
+}
 
 function onRenderHtmlIframeChange(v: boolean) {
   setHtmlIframeRenderEnabled(v)
