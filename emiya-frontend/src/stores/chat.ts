@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import type { Message } from '../types'
 import * as chatApi from '../api/chat'
 import { useConversationStore } from './conversation'
+import { useAuthStore } from './auth'
 import { fetchPersonaDetail } from '../api/persona'
 import {
   updateMvuState,
@@ -99,6 +100,11 @@ export const useChatStore = defineStore('chat', () => {
   // 双份 jsdelivr CDN 加载的竞态）。非 MVU 卡（无可跑脚本）返回 null 且不建 iframe。
   // ADR-0008d：卡有 UI（logic/ui 脚本）时载 UI 脚本 + 把 iframe 挂进停靠栏可见渲染 + 接能力处理器。
   function ensureMvuSession(conversationId: string): Promise<any> {
+    // CARD-0002：账户级 MVU 兼容开关 off → 把 MVU 卡当普通卡，不建 Host 会话、不亮卡 UI 停靠栏。
+    if (useAuthStore().user?.mvu_compat_enabled === false) {
+      mvuHostActive.value = false
+      return Promise.resolve(null)
+    }
     if (mvuSession && mvuSessionConvId === conversationId) return Promise.resolve(mvuSession)
     if (mvuInitPromise && mvuSessionConvId === conversationId) return mvuInitPromise
     if (mvuSessionConvId && mvuSessionConvId !== conversationId) disposeMvuSession()

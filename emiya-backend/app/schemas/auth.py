@@ -59,6 +59,8 @@ class UserResponse(BaseModel):
     css_theme: str | None = None
     # 情感分析默认偏好：新建对话时 analyze_emotion 的初始值（详见 docs/adr/0020）
     default_analyze_emotion: bool = False
+    # MVU 兼容总开关（详见 docs/card/0002）：off 时聊天把 MVU 卡当普通卡
+    mvu_compat_enabled: bool = True
     created_at: datetime
 
     class Config:
@@ -72,6 +74,9 @@ class UserUpdateRequest(BaseModel):
     css_theme: str | None = Field(None, description="用户级 CSS 主题（None 清空，详见 ADR-0008）")
     default_analyze_emotion: bool | None = Field(
         None, description="情感分析默认偏好，仅影响新建对话（详见 ADR-0020）"
+    )
+    mvu_compat_enabled: bool | None = Field(
+        None, description="MVU 兼容总开关，off 时聊天把 MVU 卡当普通卡（详见 CARD-0002）"
     )
 
 

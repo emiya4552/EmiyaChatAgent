@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.models.user import User
 from app.services.langgraph.chat_graph import build_analysis_graph
 from app.services.langgraph.nodes import (
     _build_template_scaffold,
@@ -92,6 +93,11 @@ async def process_chat(
     # 节点据此 gating：关 block 等于关功能。
     enabled_blocks = await _load_enabled_blocks(db, conversation.template_id)
 
+    # 2.6 MVU 兼容总开关（账户级，CARD-0002）：载入 state，node_build_prompt 据此把
+    # persona_uses_mvu 压成有效值 + 剔除 MVU 标签条目 + 跳过 EJS + 隐藏卡 UI（前端）。
+    _user_row = await db.get(User, user_id)
+    mvu_compat_enabled = bool(_user_row.mvu_compat_enabled) if _user_row else True
+
     # 3. 构建初始 state
     graph = build_analysis_graph()
     initial_state: ChatState = {
@@ -133,6 +139,7 @@ async def process_chat(
         "mvu_tool_calls": [],
         "mvu_double_ai_ops": [],
         "enabled_blocks": enabled_blocks,
+        "mvu_compat_enabled": mvu_compat_enabled,
     }
 
     # 4. 执行 graph（astream 逐节点推送中间状态，消除沉默期）

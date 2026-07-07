@@ -100,6 +100,23 @@
           <n-divider />
 
           <div class="section">
+            <n-form-item label="MVU 兼容">
+              <n-switch
+                v-model:value="mvuCompatEnabled"
+                :loading="savingMvuCompat"
+                @update:value="saveMvuCompat"
+              />
+            </n-form-item>
+            <p class="hint">
+              开启（默认）时，识别为 MVU 的角色卡在聊天中启用变量状态追踪与卡界面（如飞讯）。
+              关闭后 <b>聊天时</b> 把 MVU 卡当普通卡：不追踪状态、不显示卡界面、不注入 MVU 世界书条目。
+              仅影响聊天，导入/导出/识别不受影响；模板强制输出（非 MVU 卡的世界书模板）也不受影响。详见 CARD-0002。
+            </p>
+          </div>
+
+          <n-divider />
+
+          <div class="section">
             <h3 class="section-title">全局 CSS 主题</h3>
             <p class="hint">
               这里写的 CSS 对所有对话生效；角色卡自带样式会在全局样式之后注入，因此可以覆盖这里的规则。
@@ -328,6 +345,23 @@ async function savePerceptionDefault(v: boolean) {
     message.error(err.response?.data?.detail || '保存失败')
   } finally {
     savingPerceptionDefault.value = false
+  }
+}
+
+// MVU 兼容总开关（CARD-0002）：仅影响聊天时，改动即时保存
+const mvuCompatEnabled = ref(user.value?.mvu_compat_enabled ?? true)
+const savingMvuCompat = ref(false)
+
+async function saveMvuCompat(v: boolean) {
+  savingMvuCompat.value = true
+  try {
+    await authStore.updateMe({ mvu_compat_enabled: v })
+    message.success(v ? '已开启 MVU 兼容' : '聊天时将把 MVU 卡当普通卡')
+  } catch (err: any) {
+    mvuCompatEnabled.value = !v
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingMvuCompat.value = false
   }
 }
 

@@ -44,5 +44,12 @@ class User(Base, TimestampMixin):
         Boolean, nullable=False, server_default="false", default=False
     )
 
+    # === MVU 兼容总开关（详见 docs/card/0002） ===
+    # 账户级、仅作用于**聊天时**。关闭后把 MVU 卡当普通卡：关整条 MVU 状态机器 +
+    # 剔除 MVU 标签世界书条目 + 跳过 EJS + 隐藏卡 UI。不影响导入/检测/导出。默认开。
+    mvu_compat_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email})>"
