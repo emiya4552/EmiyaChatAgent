@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # === LLM 参数 — 摘要压缩 ===
     SUMMARY_TEMPERATURE: float = 0.3
     SUMMARY_MAX_TOKENS: int = 500
+    SUMMARY_BATCH_MESSAGES: int = 10  # 累计多少条新溢出消息后触发一次后台摘要
 
     # === LLM 参数 — 记忆提取 ===
     MEMORY_EXTRACTION_TEMPERATURE: float = 0.3

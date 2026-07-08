@@ -50,6 +50,11 @@ class ChatState(TypedDict):
     level_changed: bool
     new_milestone: str | None
 
+    # 对话历史窗口（由 node_prepare_history 产出）
+    recent_messages: list[dict]
+    summary_context: str
+    dialogue_message_count: int
+
     # Prompt 组装
     system_prompt: str
     messages: list[dict]

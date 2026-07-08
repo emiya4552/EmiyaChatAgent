@@ -64,6 +64,8 @@ from app.services.langgraph.state import ChatState
 
 logger = logging.getLogger(__name__)
 
+_summary_tasks_inflight: set[UUID] = set()
+
 
 def _should_retire_backend_apply(state: dict) -> bool:
     """ADR-0008c 阶段3：是否退役后端 MVU apply（交给前端 MVU Host）。
@@ -405,6 +407,14 @@ def _count_message_tokens(messages: list[dict]) -> int:
     return sum(_count_tokens(m.get("content", "")) + 4 for m in messages)
 
 
+def _history_message_dict(message: Message) -> dict:
+    """把 Message ORM 转为可跨 LangGraph 节点传递的普通 dict。"""
+    return {
+        "role": message.role,
+        "content": message.content or "",
+    }
+
+
 def _truncate_history(history: list, budget: int) -> list:
     """从旧到新截断历史，丢弃超出 budget 的旧消息。
 
@@ -413,8 +423,16 @@ def _truncate_history(history: list, budget: int) -> list:
     if not history:
         return []
 
-    filtered = [{"role": m.role, "content": m.content}
-                for m in history if m.role in ("user", "assistant")]
+    filtered = []
+    for m in history:
+        if isinstance(m, dict):
+            role = m.get("role")
+            content = m.get("content")
+        else:
+            role = getattr(m, "role", None)
+            content = getattr(m, "content", None)
+        if role in ("user", "assistant"):
+            filtered.append({"role": role, "content": content or ""})
 
     if not filtered:
         return []
@@ -435,6 +453,84 @@ def _truncate_history(history: list, budget: int) -> list:
     kept.append(current_input)
     return kept
 
+
+# ─── 历史消息处理 ─────────────────────────────────────────────
+
+async def node_prepare_history(state: ChatState) -> dict:
+    """准备对话历史窗口与 summary 上下文。
+
+    该节点只负责消息读取、窗口切分、summary 调度与历史元数据产出。
+    Token budget 截断仍留在 node_build_prompt，因为它依赖已经渲染好的 prompt prefix。
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == state["conversation_id"],
+                Conversation.user_id == state["user_id"],
+            )
+        )
+        conv = result.scalar_one_or_none()
+        if conv is None:
+            return {"error": "对话不存在"}
+
+        msgs_result = await db.execute(
+            select(Message)
+            .where(Message.conversation_id == state["conversation_id"])
+            .order_by(Message.created_at.asc())
+        )
+        all_messages = list(msgs_result.scalars().all())
+
+        summary = None
+        summary_enabled = _block_enabled(state, "summary")
+        if len(all_messages) > settings.WINDOW_SIZE:
+            # 溢出的历史消息（超过窗口大小的旧消息）和最近的窗口消息
+            overflow = all_messages[: len(all_messages) - settings.WINDOW_SIZE]
+            recent = all_messages[len(all_messages) - settings.WINDOW_SIZE :]
+
+            # summary 功能开关：block 关 → 不触发后台 LLM 摘要、不读 summary 字段进 prompt
+            if summary_enabled:
+                summary = conv.summary
+                already_summarized = min(conv.last_summarized_count or 0, len(overflow))
+                new_overflow = overflow[already_summarized:]
+
+                batch_size = max(1, settings.SUMMARY_BATCH_MESSAGES)
+                if len(new_overflow) >= batch_size:
+                    if conv.id in _summary_tasks_inflight:
+                        logger.debug(
+                            f"摘要任务已在进行中，跳过重复触发: conv={conv.id}, "
+                            f"pending={len(new_overflow)}"
+                        )
+                    else:
+                        _summary_tasks_inflight.add(conv.id)
+                        logger.info(
+                            f"触发后台摘要: conv={conv.id}, "
+                            f"pending={len(new_overflow)}, batch={batch_size}"
+                        )
+                        _asyncio.create_task(_update_summary_background(
+                            conv_id=conv.id,
+                            messages=new_overflow,
+                            existing_summary=conv.summary,
+                            summarized_count=len(overflow),
+                        ))
+                elif new_overflow:
+                    logger.debug(
+                        f"摘要待积累: conv={conv.id}, "
+                        f"pending={len(new_overflow)}, batch={batch_size}"
+                    )
+        else:
+            recent = all_messages
+
+        dialogue_count = sum(
+            1 for m in all_messages if m.role in ("user", "assistant")
+        )
+
+        return {
+            "recent_messages": [_history_message_dict(m) for m in recent],
+            "summary_context": summary or "",
+            "dialogue_message_count": dialogue_count,
+            "is_first_round": len(all_messages) <= 1,
+            "error": None,
+        }
 
 # ─── Prompt 组装 ─────────────────────────────────────────────────
 
@@ -464,37 +560,8 @@ async def node_build_prompt(state: ChatState) -> dict:
             )
             persona = p_result.scalar_one_or_none()
 
-        msgs_result = await db.execute(
-            select(Message)
-            .where(Message.conversation_id == state["conversation_id"])
-            .order_by(Message.created_at.asc())
-        )
-        all_messages = list(msgs_result.scalars().all())
-
-        summary = None
-        summary_enabled = _block_enabled(state, "summary")
-        if len(all_messages) > settings.WINDOW_SIZE:
-            overflow = all_messages[: len(all_messages) - settings.WINDOW_SIZE]
-            recent = all_messages[len(all_messages) - settings.WINDOW_SIZE :]
-
-            # summary 功能开关：block 关 → 不触发后台 LLM 摘要、不读 summary 字段进 prompt
-            if summary_enabled:
-                already_summarized = min(conv.last_summarized_count or 0, len(overflow))
-                new_overflow = overflow[already_summarized:]
-
-                if new_overflow:
-                    summary = conv.summary
-                    conv.last_summarized_count = len(overflow)
-                    await db.commit()
-                    _asyncio.create_task(_update_summary_background(
-                        conv_id=conv.id,
-                        messages=new_overflow,
-                        existing_summary=conv.summary,
-                    ))
-                else:
-                    summary = conv.summary
-        else:
-            recent = all_messages
+        recent = state.get("recent_messages") or []
+        summary = state.get("summary_context", "")
 
         # ── Prompt 模板渲染 ──
         # 情绪不再注入 Prompt（详见 docs/adr/0005）：current_mood / emotion 仅用于
@@ -515,7 +582,7 @@ async def node_build_prompt(state: ChatState) -> dict:
             "relationship_context": state.get("relationship_section", ""),
             "memory_context": memory_ctx,
             "profile_context": state.get("profile_section", ""),
-            "summary_context": summary or "",
+            "summary_context": summary,
             "reply_length": state.get("reply_length", "medium"),
             "author_note": conv.author_note or "",
         }
@@ -596,7 +663,7 @@ async def node_build_prompt(state: ChatState) -> dict:
 
         # ── Author's Note 注入（历史末尾倒数 an_depth 条之前） ──
         if conv.author_note and conv.author_note.strip():
-            an_msg_count = sum(1 for m in all_messages if m.role in ("user", "assistant"))
+            an_msg_count = state.get("dialogue_message_count", 0)
             interval = max(1, conv.an_interval or 1)
             # interval=1 等价每次必插；其余按消息计数取模
             if interval == 1 or (an_msg_count % interval == 0):
@@ -708,7 +775,7 @@ async def node_build_prompt(state: ChatState) -> dict:
         if truncated:
             _log_messages(rendered, persona.name if persona else "无角色")
 
-        is_first = len(all_messages) <= 1
+        is_first = state.get("is_first_round", False)
 
         return {
             "messages": rendered,
@@ -1392,7 +1459,10 @@ async def node_post_process(state: ChatState) -> dict:
 
 
 async def _update_summary_background(
-    conv_id: UUID, messages: list[Message], existing_summary: str | None
+    conv_id: UUID,
+    messages: list[Message],
+    existing_summary: str | None,
+    summarized_count: int | None = None,
 ) -> None:
     """后台异步更新摘要。"""
     try:
@@ -1404,10 +1474,17 @@ async def _update_summary_background(
             conv = result.scalar_one_or_none()
             if conv:
                 conv.summary = summary
+                if summarized_count is not None:
+                    conv.last_summarized_count = max(
+                        conv.last_summarized_count or 0,
+                        summarized_count,
+                    )
                 db.add(conv)
                 await db.commit()
     except Exception:
         logger.exception("后台摘要更新失败")
+    finally:
+        _summary_tasks_inflight.discard(conv_id)
 
 
 async def _extract_memories_delayed(
