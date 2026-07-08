@@ -33,7 +33,11 @@ from app.services.conversation_service import (
     update_conversation_config,
 )
 from app.config import settings
-from app.services.mvu_runtime import describe_conversation_mvu_state
+from app.services.mvu_runtime import (
+    build_mvu_policy_for_user_persona,
+    describe_conversation_mvu_state,
+)
+from app.services.mvu_runtime.opening import process_opening_message
 from app.utils.exceptions import NotFoundException
 
 logger = logging.getLogger(__name__)
@@ -394,42 +398,30 @@ async def switch_greeting(
         from app.utils.exceptions import AppException
         raise AppException("该位置的开场白为空", status_code=400)
 
-    # 用 message_pipeline 走完整流程（MacroEngine → reply 正则 → MVU 解析）
-    # 与 create_conversation 完全一致，详见 ADR-0015。
-    from app.services.message_pipeline import process_assistant_message_text
-    from app.models.user import User as UserModel
-    user_row = await db.get(UserModel, current_user.id)
+    # 用统一 opening pipeline 走完整流程；MVU 变量桶 / UpdateVariable 写入由
+    # MvuRuntimePolicy gate，与 create_conversation 保持一致。
+    user_row = await db.get(User, current_user.id)
     user_persona = None
     if conv.user_persona_id:
         user_persona = await db.get(Persona, conv.user_persona_id)
-    macro_scope = {
-        "local": dict(conv.variables or {}),
-        "global": dict((user_row.global_variables if user_row else None) or {}),
-        "names": {
-            "user": (user_persona.name if user_persona else None)
-                    or (user_row.nickname if user_row else "")
-                    or "",
-            "char": persona.name,
-        },
-    }
-    processed_text, display_text, updated_scope = await process_assistant_message_text(
+    mvu_policy = build_mvu_policy_for_user_persona(user=user_row, persona=persona)
+    opening = await process_opening_message(
         new_text,
         db=db,
-        conv=conv,
-        mvu_scope=macro_scope,
-        macro_scope=macro_scope,
-        run_macro=True,
+        conversation=conv,
+        persona=persona,
+        user=user_row,
+        user_persona=user_persona,
+        policy=mvu_policy,
     )
 
-    # 写回 Message + conv.variables（如果 UpdateVariable 解析出新 stat_data）
-    msgs[0].content = processed_text
-    msgs[0].display_content = display_text
+    # 写回 Message + conv.variables（仅 MVU active 且开场白确实产出变量时）
+    msgs[0].content = opening.content
+    msgs[0].display_content = opening.display_content
     db.add(msgs[0])
-    if updated_scope is not None:
-        local_after = updated_scope.get("local") or {}
-        if local_after:
-            conv.variables = local_after
-            db.add(conv)
+    if opening.variables:
+        conv.variables = opening.variables
+        db.add(conv)
     await db.commit()
     await db.refresh(msgs[0])
 

@@ -60,6 +60,12 @@ from app.services.worldbook.injector import (
 )
 from app.services.worldbook.scanner import ActiveEntry, scan_worldbook
 from app.services.worldbook.service import get_worldbooks_by_ids
+from app.services.mvu_runtime.policy import build_mvu_policy_for_user_persona
+from app.services.mvu_runtime.scope import build_macro_scope
+from app.services.mvu_runtime.worldbook import (
+    filter_worldbook_entries_for_prompt,
+    is_mvu_tagged_entry,
+)
 from app.services.langgraph.state import ChatState
 
 logger = logging.getLogger(__name__)
@@ -536,7 +542,11 @@ async def node_prepare_history(state: ChatState) -> dict:
 
 async def node_build_prompt(state: ChatState) -> dict:
     """组装完整的 messages 列表。"""
-    from app.services.prompt_renderer import PromptRenderer, DEFAULT_TEMPLATE_BLOCKS, PromptBlock
+    from app.services.prompt_renderer import (
+        PromptRenderer,
+        DEFAULT_TEMPLATE_BLOCKS,
+        prompt_block_from_dict,
+    )
     from app.services.preset_injector import PresetInjector
     from app.services.regex_processor import RegexProcessor
     from app.services.preset_service import get_preset_for_injection
@@ -563,10 +573,6 @@ async def node_build_prompt(state: ChatState) -> dict:
         recent = state.get("recent_messages") or []
         summary = state.get("summary_context", "")
 
-        # ── Prompt 模板渲染 ──
-        # 情绪不再注入 Prompt（详见 docs/adr/0005）：current_mood / emotion 仅用于
-        # 聊天页 emoji + Dashboard + 关系系统的 deep_talk_count，不进 LLM 上下文
-
         # 构建记忆上下文
         recalled = state.get("recalled_memories", [])
         memory_ctx = ""
@@ -587,9 +593,9 @@ async def node_build_prompt(state: ChatState) -> dict:
             "author_note": conv.author_note or "",
         }
 
-        # ── MVU scope 加载（详见 docs/adr/0007） ──
-        # local 桶来自 conversation.variables；global 桶来自 user.global_variables
-        # names 用于 {{user}}/{{char}} 名字宏；user_persona.name 作为 {{user}}
+        # ── Macro/MVU scope 加载（详见 docs/adr/0007） ──
+        # names 用于 {{user}}/{{char}}，不是 MVU 专属，始终保留。
+        # local/global 属于 MVU 状态桶，受账户 MVU 兼容开关控制。
         user_result = await db.execute(
             select(User).where(User.id == state["user_id"])
         )
@@ -600,15 +606,15 @@ async def node_build_prompt(state: ChatState) -> dict:
                 select(Persona.name).where(Persona.id == conv.user_persona_id)
             )
             user_persona_name = up_result.scalar_one_or_none() or ""
+        mvu_policy = build_mvu_policy_for_user_persona(user=user_row, persona=persona)
         # 副本避免直接持有 ORM JSONB 引用；落库由 post_process 显式做
-        scope = {
-            "local": dict(conv.variables or {}),
-            "global": dict((user_row.global_variables if user_row else None) or {}),
-            "names": {
-                "user": user_persona_name or (user_row.nickname if user_row else ""),
-                "char": persona.name if persona else "",
-            },
-        }
+        scope = build_macro_scope(
+            policy=mvu_policy,
+            conversation_variables=conv.variables,
+            user_global_variables=(user_row.global_variables if user_row else None),
+            user_name=user_persona_name or (user_row.nickname if user_row else ""),
+            char_name=persona.name if persona else "",
+        )
 
         # 从 DB 加载对话关联的模板
         template = None
@@ -619,12 +625,19 @@ async def node_build_prompt(state: ChatState) -> dict:
             template = t_result.scalar_one_or_none()
 
         if template and template.blocks:
-            blocks = [PromptBlock(**b) for b in template.blocks]
+            blocks = [
+                block for raw in template.blocks
+                if (block := prompt_block_from_dict(raw)) is not None
+            ]
         else:
             blocks = DEFAULT_TEMPLATE_BLOCKS
         wi_activated = state.get("wi_activated") or []
         rendered = PromptRenderer.render(
-            blocks, context, wi_activated=wi_activated, scope=scope,
+            blocks,
+            context,
+            wi_activated=wi_activated,
+            scope=scope,
+            run_ejs=mvu_policy.run_ejs,
         )
         logger.info(
             f"使用模板: {template.name if template else '默认'} | "
@@ -652,12 +665,12 @@ async def node_build_prompt(state: ChatState) -> dict:
             max_context=cc.get("openai_max_context"),
         )
         truncated = _truncate_history(recent, max(budget, 100))
-        # CARD-0002：MVU 兼容总开关（账户级）。off 时跳过 EJS + 把 MVU 卡当普通卡。
-        _mvu_compat = state.get("mvu_compat_enabled", True)
         # 对 history 中每条消息跑宏（开场白/历史消息里可能含 {{user}}/{{char}}/变量宏）
         # 与 ST 对齐：history 不持久化渲染结果，每轮按当时 scope 重渲
         for h in truncated:
-            h["content"] = _render_content(h.get("content", ""), scope, run_ejs=_mvu_compat)
+            h["content"] = _render_content(
+                h.get("content", ""), scope, run_ejs=mvu_policy.run_ejs,
+            )
         history_start_idx = len(rendered)
         rendered.extend(truncated)
 
@@ -676,7 +689,9 @@ async def node_build_prompt(state: ChatState) -> dict:
                     insert_idx = len(rendered) - an_depth
                 rendered.insert(insert_idx, {
                     "role": an_role,
-                    "content": _render_content(conv.author_note, scope, run_ejs=_mvu_compat),
+                    "content": _render_content(
+                        conv.author_note, scope, run_ejs=mvu_policy.run_ejs,
+                    ),
                     ANCHOR_KEY: ANCHOR_AUTHOR_NOTE,
                 })
 
@@ -684,21 +699,7 @@ async def node_build_prompt(state: ChatState) -> dict:
         # 这些条目命令模型"在正文输出 <UpdateVariable> 文本"，会和 update_variables 工具
         # 竞争、让模型走文本通道。其内容已进 tool description，这里只从**注入**移除
         # （state["wi_activated"] 不动，工具描述/诊断仍拿全量），并追加一句"用工具"引导。
-        # 注意：`persona_uses_mvu` 要到本节点 return 时才写进 state，这里 state.get 拿不到；
-        # 直接读本节点已加载的 persona 对象（见上文 persona = ... 处）。
-        # CARD-0002：**有效** MVU = persona.uses_mvu AND 账户 mvu_compat_enabled。
-        _persona_raw_mvu = bool(persona and getattr(persona, "uses_mvu", False))
-        mvu_update_divert_mode = _persona_raw_mvu and _mvu_compat
-        if mvu_update_divert_mode and wi_activated:
-            from app.services.mvu_runtime.runtime_view import classify_mvu_comment
-            wi_activated = [
-                e for e in wi_activated
-                if classify_mvu_comment(e.get("comment")) != "update"
-            ]
-        elif _persona_raw_mvu and not _mvu_compat and wi_activated:
-            # 兼容开关 off：把 MVU 卡当普通卡，主动剔除**全部** MVU 标签世界书条目
-            # （否则 [mvu_update]/[mvu_status] 等会当普通 lore 注入、漏"输出<UpdateVariable>"指令）
-            wi_activated = [e for e in wi_activated if not _is_mvu_tagged_entry(e)]
+        wi_activated = filter_worldbook_entries_for_prompt(wi_activated, mvu_policy)
 
         # ── Worldbook 注入：按 8 个 position 分发 ──
         if wi_activated:
@@ -717,12 +718,20 @@ async def node_build_prompt(state: ChatState) -> dict:
                 for e in wi_activated
             ]
             rendered = WorldbookInjector.inject(
-                rendered, wi_as_active, history_start_idx, scope=scope,
+                rendered,
+                wi_as_active,
+                history_start_idx,
+                scope=scope,
+                run_ejs=mvu_policy.run_ejs,
             )
         else:
             # 没激活集也要剥掉锚点/_block_id
             rendered = WorldbookInjector.inject(
-                rendered, [], history_start_idx, scope=scope,
+                rendered,
+                [],
+                history_start_idx,
+                scope=scope,
+                run_ejs=mvu_policy.run_ejs,
             )
 
         # 剥掉残留的 _block_id 元字段
@@ -735,7 +744,9 @@ async def node_build_prompt(state: ChatState) -> dict:
         if conv.preset_id:
             preset = await get_preset_for_injection(db, conv.preset_id)
             if preset:
-                rendered = PresetInjector.inject(rendered, preset, scope)
+                rendered = PresetInjector.inject(
+                    rendered, preset, scope, run_ejs=mvu_policy.run_ejs,
+                )
 
         # ── 正则后处理（独立于 preset_id；conv.regex_preset_id 来源可能是 preset
         #     或 persona.default_regex_preset_id 回退） ──
@@ -762,7 +773,7 @@ async def node_build_prompt(state: ChatState) -> dict:
                 logger.info(f"[尾部模板兜底] 注入约束：{templates}")
 
         # ── ADR-0006：tool 模式引导，替代被摘掉的 [mvu_update] 文本指令 ──
-        if mvu_update_divert_mode:
+        if mvu_policy.divert_update_entries:
             rendered.append({"role": "system", "content": _MVU_DOUBLE_AI_DIRECTIVE})
 
         # squash 策略：仅在有预设时合并连续 system 消息。
@@ -783,7 +794,7 @@ async def node_build_prompt(state: ChatState) -> dict:
             "persona_name": persona.name if persona else None,
             # CARD-0002：写**有效**值 = 原始 uses_mvu AND 账户兼容开关。下游所有 MVU 门控
             # （run_update_pass / browser_sync / retire_apply / post_process ops）读它 → 自动尊重开关。
-            "persona_uses_mvu": _persona_raw_mvu and _mvu_compat,
+            "persona_uses_mvu": mvu_policy.active,
             "is_first_round": is_first,
             "error": None,
             "mvu_scope": scope,
@@ -813,12 +824,6 @@ _TAG_STRIP_RE = _re.compile(r"<[^>]+>")
 _TEMPLATE_DOUBLE_BRACE = _re.compile(r"\{\{[^{}\n]{1,100}\}\}")
 _TEMPLATE_SINGLE_BRACE = _re.compile(r"\{[^{}\n]{1,100}\}")
 
-# MVU 协议/指令族标签（comment 子串，大小写不敏感，对齐 MVU 的 includes 语义）。
-# 这些条目是"教 LLM 输出 <UpdateVariable> 的指令"或"状态读数"，**不是**要 LLM 回填
-# 追加的 HTML 显示模板——绝不能被尾部模板兜底/续写当成输出模板，否则会注入错误约束
-# 文案并每轮空烧一次 prefix 续写。详见 docs/mvu/adr/0003（标签拦截）。
-_MVU_TAG_RE = _re.compile(r"\[(?:mvu_update|mvu_plot|mvu_status|initvar|opening)\]", _re.I)
-
 # ADR-0006：tool 模式下替代 [mvu_update] 文本指令的引导（[mvu_update] 已从注入摘除）
 _MVU_TOOL_DIRECTIVE = (
     "[状态更新 — 工具模式]\n"
@@ -838,10 +843,6 @@ _MVU_DOUBLE_AI_DIRECTIVE = (
 )
 
 
-def _is_mvu_tagged_entry(entry: dict) -> bool:
-    return bool(_MVU_TAG_RE.search(str(entry.get("comment") or "")))
-
-
 def _extract_template_entries(wi_activated: list[dict]) -> list[dict]:
     """识别"输出模板"型条目，返回每个的 {marker, content, order}。
 
@@ -859,7 +860,7 @@ def _extract_template_entries(wi_activated: list[dict]) -> list[dict]:
         # MVU 指令/状态族条目（[mvu_update]/[mvu_status]/[mvu_plot]/[initvar]/[opening]）
         # 不是输出模板：它们的 <UpdateVariable>/<Analysis>/<status_...> 等标签会误命中
         # has_custom_tag。跳过，避免尾部模板兜底注入错误约束 + 空烧续写（ADR-0003 拦截）。
-        if _is_mvu_tagged_entry(entry):
+        if is_mvu_tagged_entry(entry):
             continue
 
         has_details = bool(_DETAILS_RE.search(content))
@@ -1064,16 +1065,21 @@ async def node_post_process(state: ChatState) -> dict:
             select(Conversation).where(Conversation.id == conv_id)
         )
         conv_for_pipeline = conv_result.scalar_one_or_none()
+        mvu_active = bool(state.get("persona_uses_mvu"))
 
         # ── 把 LLM 输出走 ADR-0015 管道（与开场白共用）──
         # MacroEngine 对 LLM 实时输出意义不大（LLM 不会自己写 {{user}} 宏），
         # 但 reply 正则 + UpdateVariable 解析必跑。
         processed_reply = state.get("assistant_reply") or ""
         display_reply = processed_reply
-        scope_before = state.get("mvu_scope")
+        scope_before = state.get("mvu_scope") if mvu_active else None
         # ADR-0005：有界校验层的约束（来自本轮激活的 [mvu_update] 条目）+ 诊断收集
         from app.services.mvu_runtime import extract_constraints_from_entries
-        mvu_constraints = extract_constraints_from_entries(state.get("wi_activated"))
+        mvu_constraints = (
+            extract_constraints_from_entries(state.get("wi_activated"))
+            if mvu_active
+            else {}
+        )
         update_diag = {"applied": 0, "dropped": [], "coerced": [], "clamped": []}
         update_channel = "none"
         if processed_reply and conv_for_pipeline is not None:
@@ -1106,7 +1112,7 @@ async def node_post_process(state: ChatState) -> dict:
 
         # ── ADR-0005：tool-calling 更新通道（与文本通道汇到同一校验+应用核心）──
         tool_calls = state.get("mvu_tool_calls")
-        if tool_calls and not _retire_apply:
+        if mvu_active and tool_calls and not _retire_apply:
             from app.services.mvu_runtime.tools import extract_update_ops_from_tool_calls
             from app.services.message_pipeline import _apply_json_patch_ops
             ops = extract_update_ops_from_tool_calls(tool_calls)
@@ -1122,7 +1128,7 @@ async def node_post_process(state: ChatState) -> dict:
                 update_channel = "tool"
 
         double_ai_ops = state.get("mvu_double_ai_ops")
-        if double_ai_ops and not _retire_apply:
+        if mvu_active and double_ai_ops and not _retire_apply:
             from app.services.message_pipeline import _apply_json_patch_ops
             scope_after = state.get("mvu_scope") or {"local": {}, "global": {}, "names": {}}
             local_bucket = scope_after.setdefault("local", {})
@@ -1305,7 +1311,7 @@ async def node_post_process(state: ChatState) -> dict:
         # ── MVU scope 落库（详见 docs/adr/0007 决策 3） ──
         # 在 post_process 成功路径写回，保证 incvar 幂等：若 build_prompt 后
         # LLM 调用失败，本节点不跑，counter 不会多增。
-        if mvu_scope:
+        if mvu_active and mvu_scope:
             try:
                 conv_result = await db.execute(
                     select(Conversation).where(Conversation.id == conv_id)

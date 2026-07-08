@@ -285,12 +285,11 @@ export interface WorldInfoActivated {
 
 export interface PromptBlock {
   id: string
-  type: 'static' | 'variable' | 'dynamic' | 'reply_length' | 'outlet' | 'author_note' | 'mes_example'
+  type: 'static' | 'dynamic' | 'reply_length' | 'outlet' | 'author_note' | 'mes_example'
   label: string
   enabled: boolean
   role: 'system' | 'user' | 'assistant'
   content?: string | null
-  variable_ref?: string | null
   dynamic_ref?: string | null
   reply_length_config?: { short: string; medium: string; long: string } | null
   outlet_name?: string | null

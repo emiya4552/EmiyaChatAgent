@@ -2,7 +2,7 @@
 """Prompt 模板渲染引擎：template + context → messages 列表。"""
 import re
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, fields
 
 from app.services.ejs_engine import EJSEngine
 from app.services.macro_engine import MacroEngine
@@ -15,17 +15,47 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PromptBlock:
     id: str
-    # static | variable | dynamic | reply_length | outlet | author_note | mes_example
+    # static | dynamic | reply_length | outlet | author_note | mes_example
     type: str
     label: str
     enabled: bool = True
     role: str = "system"
     content: str | None = None
-    variable_ref: str | None = None
     dynamic_ref: str | None = None
     reply_length_config: dict | None = None
     # Worldbook outlet 名称（仅 type="outlet" 时使用）
     outlet_name: str | None = None
+
+
+SUPPORTED_BLOCK_TYPES = {
+    "static",
+    "dynamic",
+    "reply_length",
+    "outlet",
+    "author_note",
+    "mes_example",
+}
+
+
+def prompt_block_from_dict(data: dict) -> PromptBlock | None:
+    """Build a PromptBlock from persisted JSON, ignoring retired/unknown fields.
+
+    `variable` blocks were retired in favor of static blocks with `{{persona.x}}`
+    interpolation. Old templates may still contain them; skip gracefully.
+    """
+    if not isinstance(data, dict):
+        return None
+    block_type = data.get("type")
+    if block_type not in SUPPORTED_BLOCK_TYPES:
+        logger.warning("跳过不支持的 Prompt block type=%r id=%r", block_type, data.get("id"))
+        return None
+    allowed = {f.name for f in fields(PromptBlock)}
+    cleaned = {k: v for k, v in data.items() if k in allowed}
+    try:
+        return PromptBlock(**cleaned)
+    except TypeError:
+        logger.exception("Prompt block 解析失败，已跳过: %r", data)
+        return None
 
 
 # ─── 默认模板 ───
@@ -168,6 +198,7 @@ class PromptRenderer:
         context: dict,
         wi_activated: list[dict] | None = None,
         scope: dict | None = None,
+        run_ejs: bool = True,
     ) -> list[dict]:
         """根据 blocks 列表和运行时 context 渲染 messages 列表。
 
@@ -178,6 +209,7 @@ class PromptRenderer:
             wi_activated: 当前已激活的世界书条目（用于填充 outlet 块）
             scope: MacroEngine 变量作用域，dual-bucket。所有 content 经过宏渲染。
                 详见 docs/adr/0007。
+            run_ejs: 是否执行 MVU/EJS 模板层。关闭 MVU 兼容时传 False。
         """
         messages = []
         persona = context.get("persona")
@@ -190,7 +222,8 @@ class PromptRenderer:
         def _push(role: str, content: str, block_id: str):
             if content and content.strip():
                 # EJS 先跑：展开 <%_ if %>/<%= %> 等 MVU 卡常用语法
-                content = EJSEngine.render(content, ejs_scope)
+                if run_ejs:
+                    content = EJSEngine.render(content, ejs_scope)
                 # MacroEngine 后跑：处理剩余 {{xxx}} 宏
                 content = MacroEngine.render(content, scope)
                 if not content or not content.strip():
@@ -210,11 +243,6 @@ class PromptRenderer:
                 content = _interpolate_vars(content, persona)
                 content = _resolve_simple_conditionals(content, persona)
                 _push(block.role, content, block.id)
-
-            elif block.type == "variable":
-                if block.variable_ref and block.variable_ref.startswith("persona."):
-                    val = _resolve_persona_field(persona, block.variable_ref[8:])
-                    _push(block.role, val, block.id)
 
             elif block.type == "dynamic":
                 if block.dynamic_ref:
@@ -254,7 +282,8 @@ class PromptRenderer:
                     content = ex.get("content", "")
                     if not content:
                         continue
-                    content = EJSEngine.render(content, ejs_scope)
+                    if run_ejs:
+                        content = EJSEngine.render(content, ejs_scope)
                     content = MacroEngine.render(content, scope)
                     if not content or not content.strip():
                         continue
@@ -275,7 +304,6 @@ def _block_to_dict(block: PromptBlock) -> dict:
         "enabled": block.enabled,
         "role": block.role,
         "content": block.content,
-        "variable_ref": block.variable_ref,
         "dynamic_ref": block.dynamic_ref,
         "reply_length_config": block.reply_length_config,
         "outlet_name": block.outlet_name,

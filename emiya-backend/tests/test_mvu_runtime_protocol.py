@@ -9,8 +9,12 @@ from app.services.message_pipeline import (
 from app.services.mvu_runtime import (
     analyze_card_compatibility,
     build_initial_state,
+    build_macro_scope,
+    build_mvu_policy,
+    filter_worldbook_entries_for_prompt,
     merge_initial_state_missing_only,
 )
+from app.services.prompt_renderer import PromptBlock, PromptRenderer
 from app.services.worldbook.injector import WorldbookInjector
 from app.services.worldbook.scanner import ActiveEntry
 
@@ -110,6 +114,61 @@ def test_worldbook_injector_exposes_entry_lookup_to_ejs_getwi():
     rendered = WorldbookInjector.inject(messages, activated, 1, scope={"local": {}})
 
     assert rendered == [{"role": "system", "content": "entry content"}]
+
+
+def test_mvu_policy_scope_keeps_names_when_compat_disabled():
+    policy = build_mvu_policy(persona_uses_mvu=True, compat_enabled=False)
+
+    scope = build_macro_scope(
+        policy=policy,
+        conversation_variables={"stat_data": {"hp": 1}},
+        user_global_variables={"flag": "yes"},
+        user_name="用户名",
+        char_name="角色名",
+    )
+
+    assert scope["local"] == {}
+    assert scope["global"] == {}
+    assert scope["names"] == {"user": "用户名", "char": "角色名"}
+
+
+def test_prompt_renderer_can_disable_ejs_without_disabling_name_macros():
+    block = PromptBlock(
+        id="static",
+        type="static",
+        label="static",
+        role="system",
+        content="<%= getvar('stat_data.hp') %> {{user}}",
+    )
+    scope = {
+        "local": {"stat_data": {"hp": 7}},
+        "global": {},
+        "names": {"user": "Alice", "char": "EMIYA"},
+    }
+
+    rendered = PromptRenderer.render(
+        [block], {}, scope=scope, run_ejs=False,
+    )
+
+    assert rendered[0]["content"] == "<%= getvar('stat_data.hp') %> Alice"
+
+
+def test_mvu_worldbook_policy_filters_prompt_entries():
+    entries = [
+        {"comment": "[mvu_update] rules", "content": "update"},
+        {"comment": "[mvu_status] state", "content": "status"},
+        {"comment": "ordinary lore", "content": "lore"},
+    ]
+
+    active = build_mvu_policy(persona_uses_mvu=True, compat_enabled=True)
+    disabled = build_mvu_policy(persona_uses_mvu=True, compat_enabled=False)
+
+    assert [
+        e["content"] for e in filter_worldbook_entries_for_prompt(entries, active)
+    ] == ["status", "lore"]
+    assert [
+        e["content"] for e in filter_worldbook_entries_for_prompt(entries, disabled)
+    ] == ["lore"]
 
 
 def test_mvu_initial_state_uses_opening_over_initvar_over_static_defaults():
