@@ -121,6 +121,9 @@ async def process_chat(
         "relationship_level": 0,
         "level_changed": False,
         "new_milestone": None,
+        "recent_messages": [],
+        "summary_context": "",
+        "dialogue_message_count": 0,
         "system_prompt": "",
         "messages": [],
         "persona_name": None,
@@ -174,7 +177,7 @@ async def process_chat(
                         yield f"event: worldinfo_activated\ndata: {json.dumps({'entries': compact}, ensure_ascii=False)}\n\n"
                         await _broadcast(conversation_id, "worldinfo_activated", {"entries": compact})
 
-                elif node_name == "build_prompt" and node_output.get("error"):
+                elif node_output.get("error"):
                     yield f"event: error\ndata: {json.dumps({'error': node_output['error']}, ensure_ascii=False)}\n\n"
                     return
 
