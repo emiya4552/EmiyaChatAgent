@@ -116,7 +116,6 @@ async def process_chat(
         "wi_activated": [],
         "profile": None,
         "profile_section": "",
-        "profile_constraints": "",
         "relationship": None,
         "relationship_section": "",
         "relationship_level": 0,

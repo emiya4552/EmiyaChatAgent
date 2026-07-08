@@ -42,7 +42,6 @@ class ChatState(TypedDict):
     # 用户画像
     profile: dict | None
     profile_section: str
-    profile_constraints: str  # 硬约束（避讳话题、沟通风格等 → 行为指令）
 
     # 关系状态
     relationship: dict | None

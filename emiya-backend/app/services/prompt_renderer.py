@@ -54,8 +54,10 @@ DEFAULT_TEMPLATE_BLOCKS: list[PromptBlock] = [
                 )),
     PromptBlock(id="relationship", type="dynamic", label="当前关系", role="system",
                 dynamic_ref="relationship"),
-    PromptBlock(id="constraints", type="dynamic", label="交互约束", role="system",
-                dynamic_ref="constraints"),
+    # 静态块：交互约束由用户在模板里自行编写（留空则渲染时跳过）。
+    # 曾是 dynamic（从用户人设 constraints/goal 派生），已改为静态，详见 CODE-MAP §5。
+    PromptBlock(id="constraints", type="static", label="交互约束", role="system",
+                content=""),
     PromptBlock(id="memories", type="dynamic", label="记忆", role="system",
                 dynamic_ref="memories"),
     PromptBlock(id="profile", type="dynamic", label="用户画像", role="system",
@@ -80,7 +82,6 @@ DYNAMIC_REF_CTX_KEY = {
     "memories": "memory_context",
     "profile": "profile_context",
     "summary": "summary_context",
-    "constraints": "constraints_context",
 }
 
 # ─── 变量解析 ───

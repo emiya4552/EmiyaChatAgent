@@ -49,7 +49,6 @@ async def main():
         "recalled_memories": [],
         "profile": None,
         "profile_section": "",
-        "profile_constraints": "",
         "relationship": None,
         "relationship_section": "",
         "relationship_level": 0,
