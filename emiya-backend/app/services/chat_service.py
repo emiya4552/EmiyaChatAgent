@@ -117,7 +117,6 @@ async def process_chat(
         "profile": None,
         "profile_section": "",
         "profile_constraints": "",
-        "profile_reminder": False,
         "relationship": None,
         "relationship_section": "",
         "relationship_level": 0,
@@ -184,10 +183,6 @@ async def process_chat(
         logger.error(f"LangGraph 执行失败: {e}", exc_info=True)
         yield f"event: error\ndata: {json.dumps({'error': '回复生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
         return
-
-    # Yield profile_reminder SSE 事件（无画像时提醒设置）
-    if final_state.get("profile_reminder"):
-        yield f"event: profile_reminder\ndata: {json.dumps({'message': '设置你的画像，让小暖更懂你', 'link': '/profile'}, ensure_ascii=False)}\n\n"
 
     # Yield relationship_change SSE 事件（等级变化时）
     if final_state.get("level_changed"):

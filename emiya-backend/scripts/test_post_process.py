@@ -48,7 +48,6 @@ async def main():
         "profile": None,
         "profile_section": "",
         "profile_constraints": "",
-        "profile_reminder": False,
         "relationship": None,
         "relationship_section": "",
         "relationship_level": 0,

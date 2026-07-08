@@ -243,24 +243,23 @@ async def _load_user_persona(state: ChatState) -> Persona | None:
 
 
 async def node_resolve_profile_section(state: ChatState) -> dict:
-    """产出"## 关于用户"段落 + profile_reminder（用户没设角色卡时给前端提醒）。
+    """产出"## 关于用户"段落。
 
-    功能开关：profile block 关闭 → 跳过；profile_reminder 也不发（无 user_persona 时
-    用户主动关 profile block 表示不需要提醒）。
+    功能开关：profile block 关闭 → 跳过。
     """
     if not _block_enabled(state, "profile"):
-        return {"profile": None, "profile_section": "", "profile_reminder": False}
+        return {"profile": None, "profile_section": ""}
 
     try:
         user_persona = await _load_user_persona(state)
         if user_persona is None:
-            return {"profile": None, "profile_section": "", "profile_reminder": True}
+            return {"profile": None, "profile_section": ""}
         section = _build_user_persona_profile(user_persona)
         logger.info(f"画像解析: user_persona={user_persona.name}")
-        return {"profile": None, "profile_section": section, "profile_reminder": False}
+        return {"profile": None, "profile_section": section}
     except Exception as e:
         logger.warning(f"画像段落构建失败: {e}")
-        return {"profile": None, "profile_section": "", "profile_reminder": False}
+        return {"profile": None, "profile_section": ""}
 
 
 async def node_resolve_constraints(state: ChatState) -> dict:

@@ -49,7 +49,6 @@ export const useConversationStore = defineStore('conversation', () => {
         currentRelationship.value = null
         relationshipChange.value = null
         milestone.value = null
-        profileReminder.value = null
         affinityUpdate.value = null
       }
     }
@@ -105,7 +104,6 @@ export const useConversationStore = defineStore('conversation', () => {
   const currentRelationship = ref<Relationship | null>(null)
   const relationshipChange = ref<{ level: number; level_name: string; affinity_score: number } | null>(null)
   const milestone = ref<{ key: string; name: string } | null>(null)
-  const profileReminder = ref<{ message: string; link: string } | null>(null)
   const affinityUpdate = ref<{ delta: number; reason: string; score: number } | null>(null)
 
   function setRelationshipChange(data: { level: number; level_name: string; affinity_score: number }) {
@@ -128,14 +126,9 @@ export const useConversationStore = defineStore('conversation', () => {
     milestone.value = data
   }
 
-  function setProfileReminder(data: { message: string; link: string }) {
-    profileReminder.value = data
-  }
-
   function clearRelationshipEvents() {
     relationshipChange.value = null
     milestone.value = null
-    profileReminder.value = null
   }
 
   // 每次对话提取的新记忆数量
@@ -160,12 +153,10 @@ export const useConversationStore = defineStore('conversation', () => {
     currentRelationship,
     relationshipChange,
     milestone,
-    profileReminder,
     affinityUpdate,
     setRelationshipChange,
     setAffinityUpdate,
     setMilestone,
-    setProfileReminder,
     clearRelationshipEvents,
     newMemoriesCount,
     setNewMemoriesCount,

@@ -43,7 +43,6 @@ class ChatState(TypedDict):
     profile: dict | None
     profile_section: str
     profile_constraints: str  # 硬约束（避讳话题、沟通风格等 → 行为指令）
-    profile_reminder: bool  # 无画像时提醒用户设置
 
     # 关系状态
     relationship: dict | None

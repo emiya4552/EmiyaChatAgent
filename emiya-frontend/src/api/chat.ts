@@ -21,7 +21,6 @@ export function sendMessage(
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
     onRelationshipChange?: (data: { level: number; level_name: string; affinity_score: number }) => void
     onMilestone?: (data: { key: string; name: string }) => void
-    onProfileReminder?: (data: { message: string; link: string }) => void
     onAffinityUpdate?: (data: { delta: number; reason: string; score: number }) => void
     onWorldInfoActivated?: (data: WorldInfoActivated) => void
   }
@@ -83,8 +82,6 @@ export function sendMessage(
               callbacks.onRelationshipChange?.(data)
             } else if (event === 'milestone') {
               callbacks.onMilestone?.(data)
-            } else if (event === 'profile_reminder') {
-              callbacks.onProfileReminder?.(data)
             } else if (event === 'affinity_update') {
               callbacks.onAffinityUpdate?.(data)
             } else if (event === 'worldinfo_activated') {
