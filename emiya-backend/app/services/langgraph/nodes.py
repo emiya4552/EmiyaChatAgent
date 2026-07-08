@@ -262,24 +262,6 @@ async def node_resolve_profile_section(state: ChatState) -> dict:
         return {"profile": None, "profile_section": ""}
 
 
-async def node_resolve_constraints(state: ChatState) -> dict:
-    """产出"## 交互要求"段落（约束 + goal 派生指令）。
-
-    功能开关：constraints block 关闭 → 跳过整段。
-    """
-    if not _block_enabled(state, "constraints"):
-        return {"profile_constraints": ""}
-
-    try:
-        user_persona = await _load_user_persona(state)
-        if user_persona is None:
-            return {"profile_constraints": ""}
-        return {"profile_constraints": _build_user_persona_constraints(user_persona)}
-    except Exception as e:
-        logger.warning(f"交互约束构建失败: {e}")
-        return {"profile_constraints": ""}
-
-
 def _cd(persona: Persona, key: str, default=None):
     """从角色卡 card_data JSONB 读取辅助字段。"""
     if persona and persona.card_data and key in persona.card_data:
@@ -313,41 +295,12 @@ def _build_user_persona_profile(p: Persona) -> str:
     return "## 关于用户\n" + "\n".join(lines) if lines else ""
 
 
-def _build_user_persona_constraints(p: Persona) -> str:
-    """构建"## 交互要求"段落（约束 + goal 派生指令）。"""
-    lines: list[str] = []
-    constraints = _cd(p, 'constraints')
-    if constraints:
-        lines.append(f"- {constraints}")
-
-    goal = _cd(p, 'goal') or "陪伴"
-    goal_map = {
-        "陪伴": "",
-        "倾诉": "- 用户来这里是倾诉的，请多倾听、共情，不要急于给建议",
-        "解压": "- 用户的目的是放松解压，保持轻松愉快的氛围",
-        "学习": "- 用户希望深入探讨某个话题，请认真对待每一个问题",
-    }
-    goal_instruction = goal_map.get(goal, "")
-    if goal_instruction:
-        lines.append(goal_instruction)
-
-    return "## 交互要求\n" + "\n".join(lines) if lines else ""
-
-
 async def node_assess_relationship(state: ChatState) -> dict:
     """读取好感度关系，生成 Prompt 段落（不调 LLM，纯 DB 读取 + 文本映射）。"""
     # 功能开关：relationship block 关闭 → 跳过整个关系评估（连 SSE 与 milestone 一起停）
-    if not _block_enabled(state, "relationship"):
-        return {
-            "relationship": None,
-            "relationship_level": 0,
-            "relationship_section": "",
-            "level_changed": False,
-            "new_milestone": None,
-        }
-
+    # persona_id 为空 → 没设 user_persona → 跳过关系评估
     persona_id = state.get("persona_id")
-    if persona_id is None:
+    if not _block_enabled(state, "relationship") or persona_id is None:
         return {
             "relationship": None,
             "relationship_level": 0,
@@ -562,7 +515,6 @@ async def node_build_prompt(state: ChatState) -> dict:
             "relationship_context": state.get("relationship_section", ""),
             "memory_context": memory_ctx,
             "profile_context": state.get("profile_section", ""),
-            "constraints_context": state.get("profile_constraints", ""),
             "summary_context": summary or "",
             "reply_length": state.get("reply_length", "medium"),
             "author_note": conv.author_note or "",
