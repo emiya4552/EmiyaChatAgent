@@ -15,12 +15,14 @@ class PresetInjector:
         messages: list[dict],
         preset: dict,
         scope: dict | None = None,
+        run_ejs: bool = True,
     ) -> list[dict]:
         """按 injection_position/depth 注入所有 enabled prompt。
 
         messages: 当前完整消息列表（含 system 区 + history）
         preset: 预设 JSON dict（含 prompts[] 数组）
         scope: MacroEngine dual-bucket 变量作用域，详见 docs/adr/0007
+        run_ejs: 是否执行 MVU/EJS 模板层。关闭 MVU 兼容时传 False。
 
         返回新的消息列表（不修改原列表）。
         """
@@ -64,7 +66,8 @@ class PresetInjector:
 
             # EJS 先跑（MVU 兼容，详见 ADR-0010），再跑 MacroEngine
             ejs_scope = (scope or {}).get("local") or {} if isinstance(scope, dict) else {}
-            content = EJSEngine.render(content, ejs_scope)
+            if run_ejs:
+                content = EJSEngine.render(content, ejs_scope)
             rendered = MacroEngine.render(content, scope)
             if not rendered.strip():
                 continue

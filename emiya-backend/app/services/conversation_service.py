@@ -10,8 +10,14 @@ from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.persona import Persona
 from app.models.user import User
-from app.services.macro_engine import MacroEngine
-from app.services.mvu_runtime import build_initial_state, merge_initial_state_missing_only
+from app.services.mvu_runtime import (
+    build_initial_state,
+    build_mvu_policy_for_user_persona,
+)
+from app.services.mvu_runtime.opening import (
+    merge_initial_state_for_opening,
+    process_opening_message,
+)
 from app.utils.exceptions import ForbiddenException, NotFoundException
 
 
@@ -111,6 +117,7 @@ async def create_conversation(
     # User.default_analyze_emotion（创建时快照，不追溯、不实时联动）。
     creator = await db.get(User, user_id)
     default_analyze_emotion = bool(creator.default_analyze_emotion) if creator else False
+    mvu_policy = build_mvu_policy_for_user_persona(user=creator, persona=ai_persona)
 
     import uuid as _uuid
     conversation = Conversation(
@@ -132,39 +139,24 @@ async def create_conversation(
         if 0 <= idx < len(alts):
             greeting_text = alts[idx]
     if greeting_text:
-        # 开场白 = LLM 输出（ADR-0015）：走与 node_post_process 同一条管道
-        # （MacroEngine → reply 正则 → MVU UpdateVariable 解析）。处理后的文本写
-        # DB，处理后的 stat_data（若开场白带 UpdateVariable）写 conv.variables。
-        user_row = await db.get(User, user_id)
-        macro_scope = {
-            "local": dict(conversation.variables or {}),
-            "global": dict((user_row.global_variables if user_row else None) or {}),
-            "names": {
-                "user": (user_persona.name if user_persona else None)
-                        or (user_row.nickname if user_row else "")
-                        or "",
-                "char": ai_persona.name,
-            },
-        }
-        from app.services.message_pipeline import process_assistant_message_text
-        greeting_text, greeting_display, updated_scope = await process_assistant_message_text(
+        # 开场白 = LLM 输出（ADR-0015）：走统一 opening pipeline。
+        # MVU 变量桶 / UpdateVariable 写入由 MvuRuntimePolicy gate；名字宏始终可用。
+        opening = await process_opening_message(
             greeting_text,
             db=db,
-            conv=conversation,
-            mvu_scope=macro_scope,
-            macro_scope=macro_scope,
-            run_macro=True,
+            conversation=conversation,
+            persona=ai_persona,
+            user=creator,
+            user_persona=user_persona,
+            policy=mvu_policy,
         )
-        # MVU UpdateVariable 解析若产出了 stat_data，落到 conv.variables
-        if updated_scope is not None:
-            local_after = updated_scope.get("local") or {}
-            if local_after:
-                conversation.variables = local_after
+        if opening.variables:
+            conversation.variables = opening.variables
         greeting = Message(
             conversation_id=conversation.id,
             role="assistant",
-            content=greeting_text,
-            display_content=greeting_display,
+            content=opening.content,
+            display_content=opening.display_content,
         )
         db.add(greeting)
 
@@ -175,14 +167,15 @@ async def create_conversation(
         card_data=ai_persona.card_data,
         worldbooks=worldbooks,
     )
-    if (
+    if mvu_policy.active and (
         initial_state.get("stat_data")
         or initial_state.get("sources")
         or ai_persona.uses_mvu
     ):
-        merged_variables, _ = merge_initial_state_missing_only(
+        merged_variables, _ = merge_initial_state_for_opening(
             conversation.variables or {},
             initial_state,
+            policy=mvu_policy,
         )
         conversation.variables = merged_variables
         db.add(conversation)
@@ -271,6 +264,8 @@ async def reload_conversation_mvu_initial_state(
         return None
     if conv.persona is None:
         raise NotFoundException("对话未绑定角色卡")
+    user = await db.get(User, user_id)
+    mvu_policy = build_mvu_policy_for_user_persona(user=user, persona=conv.persona)
 
     from app.services.worldbook.service import get_worldbooks_by_ids
 
@@ -279,14 +274,16 @@ async def reload_conversation_mvu_initial_state(
         card_data=conv.persona.card_data,
         worldbooks=worldbooks,
     )
-    merged_variables, _ = merge_initial_state_missing_only(
+    merged_variables, _ = merge_initial_state_for_opening(
         conv.variables or {},
         initial_state,
+        policy=mvu_policy,
         reloaded=True,
     )
-    conv.variables = merged_variables
-    db.add(conv)
-    await db.commit()
+    if (conv.variables or {}) != merged_variables:
+        conv.variables = merged_variables
+        db.add(conv)
+        await db.commit()
 
     return await get_conversation_by_id(db, conversation_id, user_id)
 

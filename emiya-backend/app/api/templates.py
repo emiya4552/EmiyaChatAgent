@@ -21,7 +21,6 @@ class TemplateBlockSchema(BaseModel):
     enabled: bool = True
     role: str = "system"
     content: str | None = None
-    variable_ref: str | None = None
     dynamic_ref: str | None = None
     reply_length_config: dict | None = None
 

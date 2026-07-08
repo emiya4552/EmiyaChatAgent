@@ -60,6 +60,7 @@ class WorldbookInjector:
         activated: list[ActiveEntry],
         history_start_idx: int,
         scope: dict | None = None,
+        run_ejs: bool = True,
     ) -> list[dict]:
         """
         Args:
@@ -68,6 +69,7 @@ class WorldbookInjector:
             history_start_idx: history 区在 messages 中的起始下标
                 （即第一条 user/assistant 消息的位置）
             scope: MacroEngine 变量作用域，详见 docs/adr/0007
+            run_ejs: 是否执行 MVU/EJS 模板层。关闭 MVU 兼容时传 False。
 
         Returns:
             新的 messages 列表（不修改原列表）。所有锚点标记字段已剥掉。
@@ -81,7 +83,7 @@ class WorldbookInjector:
             ejs_scope = dict((scope or {}).get("local") or {})
             if ae.entry_lookup:
                 ejs_scope["__wi_entries"] = ae.entry_lookup
-            c = EJSEngine.render(ae.content, ejs_scope)
+            c = EJSEngine.render(ae.content, ejs_scope) if run_ejs else ae.content
             c = MacroEngine.render(c, scope)
             rendered_entries.append(
                 ActiveEntry(

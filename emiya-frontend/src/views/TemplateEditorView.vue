@@ -43,7 +43,7 @@
             <ul class="blocks-explainer-list">
               <li><code>dynamic</code> 块（记忆 / 关系 / 画像 / 摘要 / 约束）：关掉就跳过相关后端节点（不查 ChromaDB、不调 LLM 评估等）</li>
               <li><code>reply_length</code> 块：关掉时聊天页右上的<strong>短/中/长按钮组会被禁用</strong>（详见 ADR-0014）</li>
-              <li><code>mes_example</code> / <code>author_note</code> / <code>outlet</code> / 静态 / 变量块：关掉则该块不参与 prompt 拼接</li>
+              <li><code>mes_example</code> / <code>author_note</code> / <code>outlet</code> / 静态块：关掉则该块不参与 prompt 拼接</li>
             </ul>
             想关闭某项功能时，<strong>不必另设开关</strong>——直接关掉对应块即可（情感分析除外：情绪+好感度感知没有模板块，独立放在对话设置面板；见 ADR-0019）。
           </n-alert>
@@ -90,13 +90,6 @@
                   <n-button text size="tiny" @click="insertVar(idx, 'persona.age')"><code v-text="'{{persona.age}}'"></code></n-button>
                   <n-button text size="tiny" @click="insertVar(idx, 'persona.gender')"><code v-text="'{{persona.gender}}'"></code></n-button>
                 </div>
-              </template>
-
-              <!-- Variable block -->
-              <template v-if="block.type === 'variable'">
-                <n-form-item label="变量引用">
-                  <n-select v-model:value="block.variable_ref" :options="variableOptions" size="small" :disabled="isReadOnly" />
-                </n-form-item>
               </template>
 
               <!-- Dynamic block -->
@@ -187,7 +180,6 @@ function newBlock(type: PromptBlock['type']): PromptBlock {
     enabled: true,
     role: 'system',
     content: null,
-    variable_ref: null,
     dynamic_ref: null,
     reply_length_config: null,
     outlet_name: null,
@@ -195,9 +187,6 @@ function newBlock(type: PromptBlock['type']): PromptBlock {
   if (type === 'static') {
     base.label = '静态文本'
     base.content = ''
-  } else if (type === 'variable') {
-    base.label = '变量'
-    base.variable_ref = 'persona.name'
   } else if (type === 'dynamic') {
     base.label = '动态内容'
     base.dynamic_ref = 'memories'
@@ -227,17 +216,6 @@ const form = ref<{
   blocks: [],
 })
 
-const variableOptions = [
-  { label: 'persona.name (名称)', value: 'persona.name' },
-  { label: 'persona.personality (性格)', value: 'persona.personality' },
-  { label: 'persona.background (背景)', value: 'persona.background' },
-  { label: 'persona.speaking_style (说话风格)', value: 'persona.speaking_style' },
-  { label: 'persona.age (年龄)', value: 'persona.age' },
-  { label: 'persona.gender (性别)', value: 'persona.gender' },
-  { label: 'persona.quirks (癖好)', value: 'persona.quirks' },
-  { label: 'persona.constraints (约束)', value: 'persona.constraints' },
-]
-
 const dynamicOptions = [
   // 'emotion' 已移除（详见 docs/adr/0005）：情绪不再注入 Prompt
   { label: '当前关系', value: 'relationship' },
@@ -249,7 +227,6 @@ const dynamicOptions = [
 
 const addBlockOptions = computed(() => [
   { label: '静态文本', key: 'static' },
-  { label: '变量引用', key: 'variable' },
   { label: '动态内容 (关系/记忆/画像/摘要)', key: 'dynamic' },
   { label: '回复长度控制', key: 'reply_length' },
   { label: '对话示例 (mes_example)', key: 'mes_example' },
@@ -260,7 +237,6 @@ const addBlockOptions = computed(() => [
 function blockTypeColor(type: string): 'info' | 'success' | 'warning' | 'error' | 'default' {
   const map: Record<string, 'info' | 'success' | 'warning' | 'error' | 'default'> = {
     static: 'info',
-    variable: 'success',
     dynamic: 'warning',
     reply_length: 'default',
     mes_example: 'warning',
@@ -273,7 +249,6 @@ function blockTypeColor(type: string): 'info' | 'success' | 'warning' | 'error' 
 function blockTypeLabel(type: string) {
   const map: Record<string, string> = {
     static: '静态',
-    variable: '变量',
     dynamic: '动态',
     reply_length: '长度',
     mes_example: '示例',
