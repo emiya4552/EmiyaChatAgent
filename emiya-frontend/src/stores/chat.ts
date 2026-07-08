@@ -301,9 +301,6 @@ export const useChatStore = defineStore('chat', () => {
       onMilestone(data) {
         convStore.setMilestone(data)
       },
-      onProfileReminder(data) {
-        convStore.setProfileReminder(data)
-      },
       onAffinityUpdate(data) {
         convStore.setAffinityUpdate(data)
       },

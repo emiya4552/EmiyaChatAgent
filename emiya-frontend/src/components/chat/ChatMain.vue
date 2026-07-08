@@ -299,13 +299,6 @@ watch(
   }
 )
 
-watch(() => convStore.profileReminder, (reminder) => {
-  if (reminder) {
-    msg.info(reminder.message, { duration: 5000 })
-    convStore.clearRelationshipEvents()
-  }
-})
-
 watch(() => convStore.relationshipChange, (change) => {
   if (change && currentRelationship.value) {
     currentRelationship.value = { ...currentRelationship.value, ...change, level_changed: true }
