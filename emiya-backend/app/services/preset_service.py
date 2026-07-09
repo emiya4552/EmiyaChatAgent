@@ -50,8 +50,10 @@ def _convert_st_preset(data: dict, source_name: str) -> dict:
             sampling_params[key] = data[key]
 
     context_settings = {}
-    for key in ("openai_max_context", "openai_max_tokens", "names_behavior",
-                "stream_openai"):
+    for key in ("openai_max_context", "openai_max_tokens",
+                "token_budget_safety_margin", "history_budget_cap",
+                "worldbook_budget_pct", "worldbook_budget_cap",
+                "names_behavior", "stream_openai"):
         if key in data:
             context_settings[key] = data[key]
 

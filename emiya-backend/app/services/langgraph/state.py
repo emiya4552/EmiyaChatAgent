@@ -58,6 +58,7 @@ class ChatState(TypedDict):
     # Prompt 组装
     system_prompt: str
     messages: list[dict]
+    token_budget_report: dict | None
     persona_name: str | None
     # MVU 标记：**有效** uses_mvu = persona.uses_mvu AND user.mvu_compat_enabled
     # （node_build_prompt 写入有效值，下游所有 MVU 门控读它 → 自动尊重兼容开关；CARD-0002）

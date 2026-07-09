@@ -22,6 +22,7 @@ from app.services.langgraph.nodes import (
 from app.services.langgraph.state import ChatState
 from app.services.llm_service import call_deepseek_stream, call_deepseek_stream_prefix
 from app.services.prompt_renderer import DEFAULT_TEMPLATE_BLOCKS
+from app.services.token_budget import resolve_reply_max_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +34,6 @@ async def _broadcast(conversation_id: UUID, event_type: str, data: dict) -> None
         await publish_token(str(conversation_id), event_type, data)
     except Exception:
         pass  # Redis 不可用时静默降级
-
-
-REPLY_LENGTH_MAX_TOKENS = {"short": 150, "medium": 500, "long": 2000}
 
 
 def _build_mvu_browser_sync(final_state: dict) -> dict | None:
@@ -141,6 +139,7 @@ async def process_chat(
         "mvu_double_ai_ops": [],
         "enabled_blocks": enabled_blocks,
         "mvu_compat_enabled": mvu_compat_enabled,
+        "token_budget_report": None,
     }
 
     # 4. 执行 graph（astream 逐节点推送中间状态，消除沉默期）
@@ -209,8 +208,9 @@ async def process_chat(
     chat_config = conversation.chat_config or {}
 
     # max_tokens：预设 openai_max_tokens 优先，否则按 reply_length 映射
-    dynamic_max_tokens = chat_config.get("openai_max_tokens") or REPLY_LENGTH_MAX_TOKENS.get(
-        final_state.get("reply_length", "medium"), 600
+    dynamic_max_tokens = resolve_reply_max_tokens(
+        chat_config,
+        final_state.get("reply_length", "medium"),
     )
     llm_temperature = chat_config.get("temperature", settings.CHAT_TEMPERATURE)
     llm_top_p = chat_config.get("top_p")
@@ -297,6 +297,8 @@ async def process_chat(
     final_state["assistant_reply"] = "".join(buffer)
     final_state["mvu_tool_calls"] = tool_calls_acc
 
+    logger.info(f"LLM 原始回复 (conv={conversation_id}):\n{final_state['assistant_reply']}")
+
     if not buffer and not tool_calls_acc:
         yield f"event: message_delta\ndata: {json.dumps({'content': '[没有收到回复]'}, ensure_ascii=False)}\n\n"
         yield f"event: message_done\ndata: {json.dumps({'message_id': '', 'conversation_id': str(conversation_id), 'new_memories': 0}, ensure_ascii=False)}\n\n"
@@ -347,7 +349,7 @@ async def process_chat(
             logger.exception("[MVU-DOUBLE-AI] update pass crashed")
             final_state["mvu_double_ai_ops"] = []
 
-    logger.info(f"LLM 原始回复 (conv={conversation_id}):\n{final_state['assistant_reply']}")
+    logger.info(f"LLM pre-process 回复 (conv={conversation_id}):\n{final_state['assistant_reply']}")
     logger.debug(f"即将调用 node_post_process, conv_id={conversation_id}, "
                 f"reply_len={len(final_state['assistant_reply'])}, "
                 f"state_keys={sorted(final_state.keys())}")
@@ -407,6 +409,8 @@ async def process_chat(
         update_meta=final_state.get("mvu_tool_meta"),
     )
     # ADR-0008c 阶段1：附加 down-channel（仅 MVU_BROWSER_RUNTIME on 时存在）
+    if final_state.get("token_budget_report"):
+        msg_done_data["token_budget"] = final_state["token_budget_report"]
     if mvu_browser_sync is not None:
         msg_done_data["mvu_browser_sync"] = mvu_browser_sync
     yield f"event: message_done\ndata: {json.dumps(msg_done_data, ensure_ascii=False)}\n\n"

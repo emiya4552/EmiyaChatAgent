@@ -52,9 +52,12 @@ def _system_default_chat_config() -> dict:
     """
     return {
         "temperature": settings.CHAT_TEMPERATURE,
-        # 与 nodes._calc_history_budget 的口径一致；chat_service 还会按 reply_length 再做下调
-        "openai_max_tokens": settings.CHAT_MAX_TOKENS,
+        # 输出上限不放入默认回显；未显式配置时由短/中/长回复长度决定。
         "openai_max_context": settings.MAX_CONTEXT_TOKENS,
+        "token_budget_safety_margin": settings.TOKEN_BUDGET_SAFETY_MARGIN,
+        "history_budget_cap": 0,
+        "worldbook_budget_pct": settings.WORLDBOOK_BUDGET_PCT,
+        "worldbook_budget_cap": settings.WORLDBOOK_BUDGET_CAP,
     }
 
 

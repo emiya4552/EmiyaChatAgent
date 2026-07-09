@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Message } from '../types'
+import type { Message, TokenBudgetReport } from '../types'
 import * as chatApi from '../api/chat'
 import { useConversationStore } from './conversation'
 import { useAuthStore } from './auth'
@@ -27,6 +27,7 @@ export const useChatStore = defineStore('chat', () => {
   const error = ref<string | null>(null)
   // MVU 诊断运行时视图（ADR-0003 §3）：每轮 message_done 派生，仅当前对话
   const mvuRuntimeView = ref<import('../types').MvuRuntimeView | null>(null)
+  const tokenBudgetReport = ref<TokenBudgetReport | null>(null)
   const hasMoreMessages = ref(false)
 
   let abortController: AbortController | null = null
@@ -169,6 +170,7 @@ export const useChatStore = defineStore('chat', () => {
     _currentPage = 0
     // 切换对话：清掉上一对话的 MVU 诊断视图（它只随 message_done 派生，无法从历史反推）
     mvuRuntimeView.value = null
+    tokenBudgetReport.value = null
     // 切换对话：卸掉上一对话的 MVU Host iframe（下条 mvu_browser_sync 会按需重建）
     disposeMvuSession()
     mvuLastTurnKey = null // 换对话：清回合去重键
@@ -252,6 +254,9 @@ export const useChatStore = defineStore('chat', () => {
         }
         if (data?.mvu_runtime_view) {
           mvuRuntimeView.value = data.mvu_runtime_view as import('../types').MvuRuntimeView
+        }
+        if (data?.token_budget) {
+          tokenBudgetReport.value = data.token_budget
         }
         // ADR-0019：情绪随 message_done 到达（emoji 在回合结束时更新，替代旧的回复前 emotion SSE）
         if (data?.emotion) {
@@ -372,6 +377,9 @@ export const useChatStore = defineStore('chat', () => {
         if (data?.mvu_runtime_view) {
           mvuRuntimeView.value = data.mvu_runtime_view as import('../types').MvuRuntimeView
         }
+        if (data?.token_budget) {
+          tokenBudgetReport.value = data.token_budget
+        }
         // ADR-0008c 阶段2：浏览器 MVU Host 结算（同 sendMessage 路径）
         if (data?.mvu_browser_sync) {
           void handleMvuBrowserSync(conversationId, data.mvu_browser_sync, data.message_id)
@@ -409,6 +417,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingContent,
     error,
     mvuRuntimeView,
+    tokenBudgetReport,
     hasMoreMessages,
     // ADR-0008d：卡 UI 停靠栏（MvuHostDock.vue 注册容器 / 据 mvuHostActive 显示）
     mvuHostActive,
