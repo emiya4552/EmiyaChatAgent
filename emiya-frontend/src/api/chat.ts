@@ -1,5 +1,5 @@
 import api from './index'
-import type { Message, MvuBrowserSync, WorldInfoActivated } from '../types'
+import type { Message, MvuBrowserSync, TokenBudgetReport, WorldInfoActivated } from '../types'
 
 // 获取对话消息（分页，按时间倒序）
 export async function fetchMessages(conversationId: string, limit = 200, offset = 0): Promise<Message[]> {
@@ -16,7 +16,7 @@ export function sendMessage(
   replyLength: string,
   callbacks: {
     onToken: (token: string) => void
-    onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number; variables?: Record<string, unknown>; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; emotion?: string; emotion_intensity?: number }) => void
+    onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number; variables?: Record<string, unknown>; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; token_budget?: TokenBudgetReport; emotion?: string; emotion_intensity?: number }) => void
     onError: (error: string, partialMessageId?: string) => void
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
     onRelationshipChange?: (data: { level: number; level_name: string; affinity_score: number }) => void
@@ -108,7 +108,7 @@ export function watchLive(
   signal: AbortSignal,
   callbacks: {
     onToken: (token: string) => void
-    onDone: (data: { message_id: string; conversation_id: string; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; emotion?: string; emotion_intensity?: number }) => void
+    onDone: (data: { message_id: string; conversation_id: string; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; token_budget?: TokenBudgetReport; emotion?: string; emotion_intensity?: number }) => void
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
     onError: () => void
   }

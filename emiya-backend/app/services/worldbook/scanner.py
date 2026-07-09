@@ -17,6 +17,7 @@ from app.models.worldbook import (
     WI_LOGIC_NOT_ANY,
 )
 from app.services.regex_processor import parse_js_regex
+from app.services.token_budget import resolve_worldbook_budget
 from app.utils.token_counter import count_tokens
 
 logger = logging.getLogger(__name__)
@@ -201,17 +202,9 @@ def scan_worldbook(
         return []
 
     # ── 预算计算 ──
-    max_context = (
-        chat_config.get("openai_max_context") or settings.MAX_CONTEXT_TOKENS
-    )
-    pct = chat_config.get("worldbook_budget_pct", settings.WORLDBOOK_BUDGET_PCT)
-    cap = chat_config.get("worldbook_budget_cap", settings.WORLDBOOK_BUDGET_CAP)
-    budget = max(1, round(max_context * pct / 100))
-    if cap and cap > 0 and budget > cap:
-        budget = cap
-    overflow_alert = chat_config.get(
-        "worldbook_overflow_alert", settings.WORLDBOOK_OVERFLOW_ALERT
-    )
+    budget_info = resolve_worldbook_budget(chat_config)
+    budget = int(budget_info["budget"])
+    overflow_alert = bool(budget_info["overflow_alert"])
 
     candidates: list[tuple[int, int, ActiveEntry]] = []
     """各候选条目，元组形如 (order, attach_index_in_book, ActiveEntry)。

@@ -77,25 +77,98 @@
         </div>
       </n-collapse-item>
 
-      <n-collapse-item title="上下文设置" name="context">
-        <div class="params-grid">
-          <n-form-item label="上下文窗口 Token" label-placement="left">
-            <n-input-number v-model:value="localConfig.openai_max_context" :min="1000" :max="2000000" :step="1000" />
-          </n-form-item>
-          <p class="hint">
-            单次请求发给 LLM 的 token 总预算（system prompt + 对话历史 + 输出预留），
-            对应模型本身的上下文窗口容量。注：对话历史的滑动窗口由后端按消息条数控制
-            （`WINDOW_SIZE`），溢出消息会被压缩为摘要，与该值无关。
-          </p>
-          <n-form-item label="最大输出 Token" label-placement="left">
-            <n-input-number v-model:value="localConfig.openai_max_tokens" :min="256" :max="131072" :step="256" />
-          </n-form-item>
-          <p class="hint">
-            LLM 单次回复的 token 上限，超出由 LLM 端强制截断。
-          </p>
-          <n-form-item label="世界书预算 %" label-placement="left">
-            <n-input-number v-model:value="localConfig.worldbook_budget_pct" :min="0" :max="100" :step="1" />
-          </n-form-item>
+      <n-collapse-item title="Token 预算" name="context">
+        <div class="budget-planner">
+          <div class="budget-planner-head">
+            <div>
+              <strong>模块分配</strong>
+              <span>总上下文 {{ formatTokens(plannedMaxContext) }}</span>
+            </div>
+            <span :class="['budget-state', plannedOverflowTokens > 0 ? 'is-danger' : 'is-ok']">
+              {{ plannedOverflowTokens > 0 ? `超出 ${formatTokens(plannedOverflowTokens)}` : `空闲 ${formatTokens(plannedFreeTokens)}` }}
+            </span>
+          </div>
+
+          <div class="budget-allocation" :title="`总上下文 ${formatTokens(plannedMaxContext)}`">
+            <div
+              v-for="segment in plannedBudgetSegments"
+              :key="segment.key"
+              class="budget-allocation-segment"
+              :style="{ width: `${segment.percent}%`, backgroundColor: segment.color }"
+              :title="`${segment.label}: ${formatTokens(segment.value)}`"
+            />
+          </div>
+
+          <div class="budget-legend">
+            <span v-for="segment in plannedBudgetSegments" :key="segment.key">
+              <i :style="{ backgroundColor: segment.color }" />
+              {{ segment.label }} {{ formatTokens(segment.value) }}
+            </span>
+          </div>
+
+          <div class="budget-controls">
+            <div class="budget-control">
+              <div class="budget-control-meta">
+                <strong>上下文窗口</strong>
+                <span>模型单次请求容量</span>
+              </div>
+              <n-slider v-model:value="contextBudgetControl" :min="1000" :max="2000000" :step="1000" />
+              <n-input-number v-model:value="contextBudgetControl" :min="1000" :max="2000000" :step="1000" />
+            </div>
+            <div class="budget-control">
+              <div class="budget-control-meta">
+                <strong>回复输出</strong>
+                <span>显式填写后覆盖短 / 中 / 长</span>
+              </div>
+              <n-slider v-model:value="outputBudgetControl" :min="256" :max="outputSliderMax" :step="256" />
+              <n-input-number
+                v-model:value="localConfig.openai_max_tokens"
+                :min="256"
+                :max="131072"
+                :step="256"
+                clearable
+                placeholder="跟随短/中/长"
+              />
+            </div>
+            <div class="budget-control">
+              <div class="budget-control-meta">
+                <strong>世界书</strong>
+                <span>{{ plannedWorldbookPct }}% · 上限 {{ plannedWorldbookCap ? formatTokens(plannedWorldbookCap) : '不限制' }}</span>
+              </div>
+              <n-slider v-model:value="worldbookPctControl" :min="0" :max="100" :step="1" />
+              <n-input-number v-model:value="worldbookPctControl" :min="0" :max="100" :step="1" />
+            </div>
+            <div class="budget-control">
+              <div class="budget-control-meta">
+                <strong>世界书上限</strong>
+                <span>0 表示只按百分比分配</span>
+              </div>
+              <n-slider v-model:value="worldbookCapControl" :min="0" :max="plannedMaxContext" :step="1000" />
+              <n-input-number v-model:value="worldbookCapControl" :min="0" :max="2000000" :step="1000" />
+            </div>
+            <div class="budget-control">
+              <div class="budget-control-meta">
+                <strong>安全余量</strong>
+                <span>给 tokenizer 误差和临时注入留空间</span>
+              </div>
+              <n-slider v-model:value="safetyMarginControl" :min="0" :max="plannedMaxContext" :step="500" />
+              <n-input-number v-model:value="safetyMarginControl" :min="0" :max="2000000" :step="500" />
+            </div>
+            <div class="budget-control">
+              <div class="budget-control-meta">
+                <strong>历史上限</strong>
+                <span>0 表示历史自动吃掉剩余预算</span>
+              </div>
+              <n-slider v-model:value="historyCapControl" :min="0" :max="plannedMaxContext" :step="1000" />
+              <n-input-number v-model:value="historyCapControl" :min="0" :max="2000000" :step="1000" />
+            </div>
+          </div>
+
+          <div v-if="tokenBudgetReport" class="budget-last-run">
+            上一轮实际：Prompt {{ formatTokens(tokenBudgetReport.final_prompt_tokens) }}，
+            历史 {{ tokenBudgetReport.history_kept_messages }}/{{ tokenBudgetReport.history_candidate_messages }} 条，
+            世界书 {{ formatTokens(tokenBudgetReport.worldbook.used) }}。
+          </div>
         </div>
       </n-collapse-item>
 
@@ -262,7 +335,7 @@
 import { computed, ref, watch } from 'vue'
 import {
   NButton, NCollapse, NCollapseItem, NFormItem, NInput, NInputNumber, NSelect,
-  NSwitch, useMessage,
+  NSlider, NSwitch, useMessage,
 } from 'naive-ui'
 import { useConversationStore } from '../../stores/conversation'
 import { useChatStore } from '../../stores/chat'
@@ -279,7 +352,7 @@ import { fetchTemplates } from '../../api/template'
 import { fetchRegexPresets } from '../../api/regexPreset'
 import type {
   ChatConfig, WorldbookListItem, PresetInfo, TemplateListItem, RegexPresetInfo,
-  MvuUpdateInfo,
+  MvuUpdateInfo, TokenBudgetReport,
 } from '../../types'
 
 const props = defineProps<{ visible: boolean }>()
@@ -290,6 +363,7 @@ const chatStore = useChatStore()
 const message = useMessage()
 // MVU 诊断运行时视图（ADR-0003 §3）：随最近一轮 message_done 派生
 const mvuRuntimeView = computed(() => chatStore.mvuRuntimeView)
+const tokenBudgetReport = computed<TokenBudgetReport | null>(() => chatStore.tokenBudgetReport)
 const saving = ref(false)
 
 const currentConv = computed(() =>
@@ -300,6 +374,108 @@ const localConfig = ref<ChatConfig>({})
 const boundIds = ref<string[]>([])
 const wbList = ref<WorldbookListItem[]>([])
 const loadingWb = ref(false)
+
+interface BudgetSegment {
+  key: string
+  label: string
+  value: number
+  percent: number
+  color: string
+}
+
+const DEFAULT_CONTEXT_TOKENS = 80000
+const DEFAULT_OUTPUT_TOKENS = 2000
+const DEFAULT_SAFETY_MARGIN = 2000
+const DEFAULT_WORLDBOOK_PCT = 25
+
+function clampNumber(value: unknown, min: number, max: number): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return min
+  return Math.max(min, Math.min(max, Math.round(n)))
+}
+
+const contextBudgetControl = computed<number>({
+  get: () => clampNumber(localConfig.value.openai_max_context ?? tokenBudgetReport.value?.max_context ?? DEFAULT_CONTEXT_TOKENS, 1000, 2000000),
+  set: (v) => { localConfig.value.openai_max_context = clampNumber(v, 1000, 2000000) },
+})
+const plannedMaxContext = computed(() => contextBudgetControl.value)
+
+const outputBudgetControl = computed<number>({
+  get: () => clampNumber(localConfig.value.openai_max_tokens ?? tokenBudgetReport.value?.reserved_output ?? DEFAULT_OUTPUT_TOKENS, 256, 131072),
+  set: (v) => { localConfig.value.openai_max_tokens = clampNumber(v, 256, 131072) },
+})
+const outputSliderMax = computed(() => Math.max(256, Math.min(131072, plannedMaxContext.value)))
+
+const worldbookPctControl = computed<number>({
+  get: () => clampNumber(localConfig.value.worldbook_budget_pct ?? tokenBudgetReport.value?.worldbook.pct ?? DEFAULT_WORLDBOOK_PCT, 0, 100),
+  set: (v) => { localConfig.value.worldbook_budget_pct = clampNumber(v, 0, 100) },
+})
+const plannedWorldbookPct = computed(() => worldbookPctControl.value)
+
+const worldbookCapControl = computed<number>({
+  get: () => clampNumber(localConfig.value.worldbook_budget_cap ?? tokenBudgetReport.value?.worldbook.cap ?? 0, 0, 2000000),
+  set: (v) => { localConfig.value.worldbook_budget_cap = clampNumber(v, 0, 2000000) },
+})
+const plannedWorldbookCap = computed(() => worldbookCapControl.value)
+
+const safetyMarginControl = computed<number>({
+  get: () => clampNumber(localConfig.value.token_budget_safety_margin ?? tokenBudgetReport.value?.safety_margin ?? DEFAULT_SAFETY_MARGIN, 0, 2000000),
+  set: (v) => { localConfig.value.token_budget_safety_margin = clampNumber(v, 0, 2000000) },
+})
+
+const historyCapControl = computed<number>({
+  get: () => clampNumber(localConfig.value.history_budget_cap ?? tokenBudgetReport.value?.history_cap ?? 0, 0, 2000000),
+  set: (v) => { localConfig.value.history_budget_cap = clampNumber(v, 0, 2000000) },
+})
+
+const plannedWorldbookBudget = computed(() => {
+  const pctBudget = Math.round(plannedMaxContext.value * plannedWorldbookPct.value / 100)
+  const cap = plannedWorldbookCap.value
+  return cap > 0 ? Math.min(pctBudget, cap) : pctBudget
+})
+const plannedBasePromptTokens = computed(() => Math.max(
+  0,
+  (tokenBudgetReport.value?.prompt_prefix_tokens ?? 0) - (tokenBudgetReport.value?.worldbook.used ?? 0),
+))
+const plannedHistoryAvailable = computed(() => Math.max(
+  0,
+  plannedMaxContext.value
+    - plannedBasePromptTokens.value
+    - outputBudgetControl.value
+    - plannedWorldbookBudget.value
+    - safetyMarginControl.value,
+))
+const plannedHistoryBudget = computed(() => {
+  const cap = historyCapControl.value
+  return cap > 0 ? Math.min(plannedHistoryAvailable.value, cap) : plannedHistoryAvailable.value
+})
+const plannedFixedTokens = computed(() =>
+  plannedBasePromptTokens.value
+    + outputBudgetControl.value
+    + plannedWorldbookBudget.value
+    + safetyMarginControl.value
+    + plannedHistoryBudget.value
+)
+const plannedOverflowTokens = computed(() => Math.max(0, plannedFixedTokens.value - plannedMaxContext.value))
+const plannedFreeTokens = computed(() => Math.max(0, plannedMaxContext.value - plannedFixedTokens.value))
+const plannedBudgetSegments = computed<BudgetSegment[]>(() => {
+  const total = Math.max(plannedMaxContext.value, 1)
+  const raw = [
+    { key: 'base', label: '固定 Prompt', value: plannedBasePromptTokens.value, color: '#64748b' },
+    { key: 'history', label: '历史', value: plannedHistoryBudget.value, color: '#2080f0' },
+    { key: 'worldbook', label: '世界书', value: plannedWorldbookBudget.value, color: '#18a058' },
+    { key: 'output', label: '输出', value: outputBudgetControl.value, color: '#f0a020' },
+    { key: 'safety', label: '安全余量', value: safetyMarginControl.value, color: '#8a63d2' },
+    { key: 'free', label: '空闲', value: plannedFreeTokens.value, color: '#d4d4d8' },
+    { key: 'overflow', label: '超出', value: plannedOverflowTokens.value, color: '#d03050' },
+  ]
+  return raw
+    .filter(segment => segment.value > 0)
+    .map(segment => ({
+      ...segment,
+      percent: Math.max(1, Math.min(100, (segment.value / total) * 100)),
+    }))
+})
 
 // 预设 / 模板 / 正则三件套：合并到一个"绑定"折叠区
 const bindingsLocal = ref<{
@@ -380,6 +556,10 @@ function formatVarValue(v: unknown): string {
   } catch {
     return String(v)
   }
+}
+
+function formatTokens(n: number | null | undefined): string {
+  return `${Number(n || 0).toLocaleString()} tokens`
 }
 
 function formatDateTime(v: string): string {
@@ -630,6 +810,107 @@ async function handleSave() {
 .wb-bind { padding: 4px 0; }
 .hint { color: var(--color-text-tertiary); font-size: 12px; margin: 6px 0 0; }
 .switch-hint { color: var(--color-text-tertiary); font-size: 12px; margin-left: 8px; line-height: 1.5; }
+.budget-planner {
+  border: 1px solid var(--color-border, #eee);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--color-bg-surface-elevated, #fafafa);
+}
+.budget-planner-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+.budget-planner-head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.budget-planner-head strong {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+.budget-planner-head span {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+.budget-state {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+.budget-state.is-ok { color: #18a058; }
+.budget-state.is-danger { color: #d03050; }
+.budget-allocation {
+  display: flex;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--color-border, #e5e7eb);
+  margin-bottom: 10px;
+}
+.budget-allocation-segment {
+  height: 100%;
+  min-width: 2px;
+}
+.budget-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.budget-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.budget-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.budget-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.budget-control {
+  display: grid;
+  grid-template-columns: minmax(120px, 170px) minmax(120px, 1fr) 160px;
+  gap: 12px;
+  align-items: center;
+}
+.budget-control-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.budget-control-meta strong {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+.budget-control-meta span {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+.budget-last-run {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border, #eee);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+@media (max-width: 720px) {
+  .budget-control {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
 .config-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
 .empty-vars { color: var(--color-text-tertiary); font-size: 13px; padding: 12px 0; }
 .vars-table {

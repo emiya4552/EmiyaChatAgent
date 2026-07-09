@@ -23,9 +23,11 @@ from app.services.macro_engine import MacroEngine
 
 
 def _render_content(content: str, scope: dict | None, run_ejs: bool = True) -> str:
-    """EJS → MacroEngine 二阶段渲染（MVU 兼容，详见 ADR-0010）。
+    """对可模板化文本执行 EJS 与宏两层渲染。
 
-    run_ejs=False 时跳过 EJS（CARD-0002：MVU 兼容开关 off → EJS 属 MVU 机器，不跑）。
+    EJS 用于处理角色卡 / 世界书里常见的条件与插值语法；MacroEngine
+    用于处理 {{user}}、{{char}}、变量宏等 ST 风格宏。关闭 run_ejs
+    时只保留宏渲染，适合把 MVU 模板语法隔离在兼容开关之后。
     """
     if not content:
         return content
@@ -34,10 +36,6 @@ def _render_content(content: str, scope: dict | None, run_ejs: bool = True) -> s
         content = EJSEngine.render(content, ejs_scope)
     return MacroEngine.render(content, scope)
 
-
-# ─── MVU 写回协议（详见 ADR-0010 决定 4） ───
-# `_parse_update_variable` 已上移到 app.services.message_pipeline（ADR-0015）。
-# 开场白与 LLM 输出共享同一条管道，本文件不再持有副本。
 
 from app.services.emotion_service import (
     MoodStateMachine,
@@ -66,6 +64,13 @@ from app.services.mvu_runtime.worldbook import (
     filter_worldbook_entries_for_prompt,
     is_mvu_tagged_entry,
 )
+from app.services.token_budget import (
+    build_prompt_budget_plan,
+    build_token_budget_report,
+    count_message_tokens,
+    count_text_tokens,
+    resolve_worldbook_budget,
+)
 from app.services.langgraph.state import ChatState
 
 logger = logging.getLogger(__name__)
@@ -74,10 +79,10 @@ _summary_tasks_inflight: set[UUID] = set()
 
 
 def _should_retire_backend_apply(state: dict) -> bool:
-    """ADR-0008c 阶段3：是否退役后端 MVU apply（交给前端 MVU Host）。
+    """判断本轮是否跳过后端 MVU 状态应用。
 
-    三条件同时满足：全局开关 `MVU_RETIRE_BACKEND_APPLY` + `MVU_BROWSER_RUNTIME` +
-    本对话 `persona_uses_mvu`。默认全 off → 恒 False → 后端照旧 apply。
+    三个条件同时满足时，后端只保留更新 ops 与诊断信息，不直接写 stat_data：
+    全局退役开关打开、浏览器运行时打开、当前对话实际启用 MVU。
     """
     return bool(
         settings.MVU_RETIRE_BACKEND_APPLY
@@ -92,7 +97,7 @@ def _block_enabled(state: ChatState, key: str) -> bool:
     key 通常是 dynamic_ref（"memories" / "relationship" / "profile" /
     "constraints" / "summary"）。enabled_blocks 由 chat_service 预加载。
 
-    安全降级：state 里缺 enabled_blocks 时视为启用（兼容旧调用方）。
+    安全降级：state 里缺 enabled_blocks 时视为启用，保证非聊天链路复用节点时不误关功能。
     """
     blocks = state.get("enabled_blocks")
     if blocks is None:
@@ -100,13 +105,8 @@ def _block_enabled(state: ChatState, key: str) -> bool:
     return key in blocks
 
 
-# ADR-0019：情绪分析已从"回复前独立节点"合并进 node_post_process 的感知段（与好感度
-# 评估合一、上下文感知）。原 node_analyze_emotion 已删；情绪现由 assess_turn 在回复后产出，
-# 随 message_done 透出给前端更新 emoji。感知总开关仍是 conv.analyze_emotion（现覆盖情绪+好感度）。
-
-
 async def node_retrieve_memories(state: ChatState) -> dict:
-    # 功能开关：memories block 关闭则跳过（连同 SSE memory_recall / reference_count）
+    # 记忆 block 关闭时，本轮不做向量检索，也不会产生 memory_recall 事件。
     if not _block_enabled(state, "memories"):
         return {"recalled_memories": []}
     try:
@@ -168,7 +168,7 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             conv = conv_result.scalar_one_or_none()
             if conv is None:
                 return {"wi_activated": []}
-            # 获取世界书 ID 列表（conv.worldbook_ids 是 str[]，可能为空）
+            # 对话只保存世界书 ID 列表；扫描前先过滤非法 UUID，再批量取书。
             wid_strs = list(conv.worldbook_ids or [])
             if not wid_strs:
                 return {"wi_activated": []}
@@ -195,7 +195,7 @@ async def node_activate_worldbook(state: ChatState) -> dict:
                 for b in books
             ]
 
-            # 历史消息（旧 → 新顺序）
+            # 扫描器需要完整时间顺序历史，用于按 scan_depth 构造关键词缓冲区。
             msgs_result = await db.execute(
                 select(Message)
                 .where(Message.conversation_id == state["conversation_id"])
@@ -203,8 +203,6 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             )
             history = [{"role": m.role, "content": m.content} for m in msgs_result.scalars().all()]
 
-        # MVU 变量驱动扫描：白名单非空时把选定 stat_data 路径
-        # 渲染成扫描文本，让当前变量驱动关键词激活。空 = 不做任何额外扫描。
         chat_cfg = conv.chat_config or {}
         activated = scan_worldbook(
             worldbooks=book_dicts,
@@ -212,7 +210,7 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             chat_config=chat_cfg,
         )
 
-        # 序列化成可放入 state 的 dict
+        # ActiveEntry 是运行时对象；LangGraph state 里只保留可序列化字段。
         wi_activated = [
             {
                 "uid": ae.entry.get("uid"),
@@ -305,8 +303,7 @@ def _build_user_persona_profile(p: Persona) -> str:
 
 async def node_assess_relationship(state: ChatState) -> dict:
     """读取好感度关系，生成 Prompt 段落（不调 LLM，纯 DB 读取 + 文本映射）。"""
-    # 功能开关：relationship block 关闭 → 跳过整个关系评估（连 SSE 与 milestone 一起停）
-    # persona_id 为空 → 没设 user_persona → 跳过关系评估
+    # 关系 block 关闭或当前对话没有 AI 角色时，不生成关系提示，也不检测里程碑。
     persona_id = state.get("persona_id")
     if not _block_enabled(state, "relationship") or persona_id is None:
         return {
@@ -392,25 +389,16 @@ def _build_relationship_section(assessment: dict) -> str:
     return "\n".join(lines)
 
 
-# mes_example 解析已迁至 prompt_renderer.py::parse_mes_example
-# （随 type='mes_example' block 类型一起；详见 ADR-XXX 待后续）
-
-
 # ─── Token 计数与预算 ─────────────────────────────────────────────
 
 def _count_tokens(text: str) -> int:
     """估算文本 token 数。"""
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        return len(enc.encode(text))
-    except Exception:
-        return int(len(text) / 3.5)
+    return count_text_tokens(text)
 
 
 def _count_message_tokens(messages: list[dict]) -> int:
     """计算消息列表的 token 总数（含 role 格式开销，每条 +4）。"""
-    return sum(_count_tokens(m.get("content", "")) + 4 for m in messages)
+    return count_message_tokens(messages)
 
 
 def _history_message_dict(message: Message) -> dict:
@@ -443,7 +431,7 @@ def _truncate_history(history: list, budget: int) -> list:
     if not filtered:
         return []
 
-    # 最后一条是当前用户输入，必须保留
+    # 当前用户输入是本轮生成的核心输入，即使历史预算紧张也必须保留。
     current_input = filtered[-1]
     older = filtered[:-1]
 
@@ -489,11 +477,11 @@ async def node_prepare_history(state: ChatState) -> dict:
         summary = None
         summary_enabled = _block_enabled(state, "summary")
         if len(all_messages) > settings.WINDOW_SIZE:
-            # 溢出的历史消息（超过窗口大小的旧消息）和最近的窗口消息
+            # 先按消息数量切窗口：旧消息进入摘要候选，最近消息进入 prompt 候选。
             overflow = all_messages[: len(all_messages) - settings.WINDOW_SIZE]
             recent = all_messages[len(all_messages) - settings.WINDOW_SIZE :]
 
-            # summary 功能开关：block 关 → 不触发后台 LLM 摘要、不读 summary 字段进 prompt
+            # 摘要 block 关闭时，不读取旧摘要，也不触发后台摘要任务。
             if summary_enabled:
                 summary = conv.summary
                 already_summarized = min(conv.last_summarized_count or 0, len(overflow))
@@ -541,7 +529,12 @@ async def node_prepare_history(state: ChatState) -> dict:
 # ─── Prompt 组装 ─────────────────────────────────────────────────
 
 async def node_build_prompt(state: ChatState) -> dict:
-    """组装完整的 messages 列表。"""
+    """组装发给聊天模型的完整 messages 列表。
+
+    主流程分为：加载对话资源、构造运行时上下文、渲染模板骨架、
+    截断并追加历史、插入 Author's Note、注入世界书和预设、执行
+    promptOnly 正则，最后返回可直接发送给 LLM 的 messages。
+    """
     from app.services.prompt_renderer import (
         PromptRenderer,
         DEFAULT_TEMPLATE_BLOCKS,
@@ -573,7 +566,7 @@ async def node_build_prompt(state: ChatState) -> dict:
         recent = state.get("recent_messages") or []
         summary = state.get("summary_context", "")
 
-        # 构建记忆上下文
+        # 把召回记忆整理成一段 system 内容，交给模板里的 memories block 注入。
         recalled = state.get("recalled_memories", [])
         memory_ctx = ""
         if recalled:
@@ -593,9 +586,9 @@ async def node_build_prompt(state: ChatState) -> dict:
             "author_note": conv.author_note or "",
         }
 
-        # ── Macro/MVU scope 加载（详见 docs/adr/0007） ──
-        # names 用于 {{user}}/{{char}}，不是 MVU 专属，始终保留。
-        # local/global 属于 MVU 状态桶，受账户 MVU 兼容开关控制。
+        # ── 宏作用域与 MVU 运行策略 ──
+        # names 提供 {{user}} / {{char}}；local/global 提供变量桶。
+        # MVU 运行策略决定是否暴露变量桶、是否执行 EJS、是否过滤 MVU 条目。
         user_result = await db.execute(
             select(User).where(User.id == state["user_id"])
         )
@@ -607,7 +600,7 @@ async def node_build_prompt(state: ChatState) -> dict:
             )
             user_persona_name = up_result.scalar_one_or_none() or ""
         mvu_policy = build_mvu_policy_for_user_persona(user=user_row, persona=persona)
-        # 副本避免直接持有 ORM JSONB 引用；落库由 post_process 显式做
+        # scope 使用 JSON 副本，避免渲染阶段直接修改 ORM JSONB 引用。
         scope = build_macro_scope(
             policy=mvu_policy,
             conversation_variables=conv.variables,
@@ -616,7 +609,7 @@ async def node_build_prompt(state: ChatState) -> dict:
             char_name=persona.name if persona else "",
         )
 
-        # 从 DB 加载对话关联的模板
+        # 对话可绑定自定义模板；未绑定时使用内置默认模板。
         template = None
         if conv.template_id:
             t_result = await db.execute(
@@ -645,28 +638,41 @@ async def node_build_prompt(state: ChatState) -> dict:
             f"WI 激活: {len(wi_activated)}"
         )
 
-        # 给 char_desc 块产出的消息打锚点（供 WorldbookInjector 定位 BEFORE/AFTER_CHAR）
+        # 模板渲染后先打临时锚点，后续世界书注入器靠这些锚点定位注入位置。
         for m in rendered:
             if m.get("_block_id") == "char_desc":
                 m[ANCHOR_KEY] = ANCHOR_CHAR_DESC
 
-        # mes_example：优先用模板 mes_example block 产出的消息（render 时已注入），
+        # 对话示例的第一条消息作为 EM 锚点，用于 EM_TOP / EM_BOTTOM 注入。
         em_first = next(
             (m for m in rendered if m.get("_block_id") == "mes_example"), None,
         )
         if em_first is not None:
             em_first[ANCHOR_KEY] = ANCHOR_MES_EXAMPLE
 
-        # Token Budget 截断历史
+        # ── 历史预算与历史渲染 ──
+        # 先用已渲染的 system 前缀估算剩余 token，再从最近窗口中保留尽量多的历史。
         cc = conv.chat_config or {}
-        budget = _calc_history_budget(
-            rendered,
-            max_tokens=cc.get("openai_max_tokens"),
-            max_context=cc.get("openai_max_context"),
+        history_candidates = [
+            {"role": m.get("role"), "content": m.get("content") or ""}
+            for m in recent
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        ]
+        wi_for_budget = filter_worldbook_entries_for_prompt(wi_activated, mvu_policy)
+        wi_budget_messages = [
+            {
+                "role": str((entry or {}).get("role") or "system"),
+                "content": (entry or {}).get("content") or "",
+            }
+            for entry in wi_for_budget
+        ]
+        budget_plan = build_prompt_budget_plan(
+            prefix_messages=rendered + wi_budget_messages,
+            chat_config=cc,
+            reply_length=state.get("reply_length", "medium"),
         )
-        truncated = _truncate_history(recent, max(budget, 100))
-        # 对 history 中每条消息跑宏（开场白/历史消息里可能含 {{user}}/{{char}}/变量宏）
-        # 与 ST 对齐：history 不持久化渲染结果，每轮按当时 scope 重渲
+        truncated = _truncate_history(recent, max(budget_plan.history_budget, 100))
+        # 历史消息只在本轮 prompt 中按当前 scope 渲染，不把渲染结果写回数据库。
         for h in truncated:
             h["content"] = _render_content(
                 h.get("content", ""), scope, run_ejs=mvu_policy.run_ejs,
@@ -674,11 +680,12 @@ async def node_build_prompt(state: ChatState) -> dict:
         history_start_idx = len(rendered)
         rendered.extend(truncated)
 
-        # ── Author's Note 注入（历史末尾倒数 an_depth 条之前） ──
+        # ── Author's Note 注入 ──
+        # Author's Note 作为可配置的提示块插入历史深处；an_depth 控制离末尾多远。
         if conv.author_note and conv.author_note.strip():
             an_msg_count = state.get("dialogue_message_count", 0)
             interval = max(1, conv.an_interval or 1)
-            # interval=1 等价每次必插；其余按消息计数取模
+            # interval=1 表示每轮注入；更大的 interval 表示每 N 条消息注入一次。
             if interval == 1 or (an_msg_count % interval == 0):
                 an_role = conv.an_role or "system"
                 an_depth = max(0, conv.an_depth or 0)
@@ -695,10 +702,9 @@ async def node_build_prompt(state: ChatState) -> dict:
                     ANCHOR_KEY: ANCHOR_AUTHOR_NOTE,
                 })
 
-        # ── ADR-0006：tool 模式下把 [mvu_update] 从 prompt 注入里摘掉 ──
-        # 这些条目命令模型"在正文输出 <UpdateVariable> 文本"，会和 update_variables 工具
-        # 竞争、让模型走文本通道。其内容已进 tool description，这里只从**注入**移除
-        # （state["wi_activated"] 不动，工具描述/诊断仍拿全量），并追加一句"用工具"引导。
+        # ── MVU 世界书条目过滤 ──
+        # 更新规则类条目不直接注入主回复 prompt，避免模型在可见正文中输出隐藏变量块。
+        # 原始激活集仍保留在 state 里，供更新通道和诊断视图使用。
         wi_activated = filter_worldbook_entries_for_prompt(wi_activated, mvu_policy)
 
         # ── Worldbook 注入：按 8 个 position 分发 ──
@@ -725,7 +731,7 @@ async def node_build_prompt(state: ChatState) -> dict:
                 run_ejs=mvu_policy.run_ejs,
             )
         else:
-            # 没激活集也要剥掉锚点/_block_id
+            # 即使没有激活条目，也要通过注入器剥掉模板锚点。
             rendered = WorldbookInjector.inject(
                 rendered,
                 [],
@@ -734,7 +740,7 @@ async def node_build_prompt(state: ChatState) -> dict:
                 run_ejs=mvu_policy.run_ejs,
             )
 
-        # 剥掉残留的 _block_id 元字段
+        # _block_id 只服务于本地注入定位，不能发送给 LLM。
         rendered = [
             {k: v for k, v in m.items() if k != "_block_id"}
             for m in rendered
@@ -748,10 +754,14 @@ async def node_build_prompt(state: ChatState) -> dict:
                     rendered, preset, scope, run_ejs=mvu_policy.run_ejs,
                 )
 
-        # ── 正则后处理（独立于 preset_id；conv.regex_preset_id 来源可能是 preset
-        #     或 persona.default_regex_preset_id 回退） ──
-        # macro_scope 透传给 RegexProcessor，让 substituteRegex 字段下的
-        # findRegex/replaceString 也能跑 {{user}}/{{char}}/getvar 等宏（ADR-0016）
+        # ── promptOnly 正则后处理 ──
+        # 这里处理的是"发给 LLM 之前"的正则脚本，只会取 promptOnly=true 的脚本。
+        # 脚本来源优先 conv.regex_preset_id；未显式选择时，可从当前 preset 绑定的
+        # regex_preset_id 回退。拿到脚本后，对已经组装好的 messages 做一次最终改写。
+        #
+        # macro_scope 传给 RegexProcessor，是为了支持 ST 的 substituteRegex：
+        # 当脚本允许宏替换时，findRegex / replaceString 里的 {{user}}、{{char}}、
+        # getvar 等宏会按当前对话 scope 先渲染，再参与正则匹配/替换。
         from app.services.regex_preset_service import get_prompt_only_scripts
         scripts = await get_prompt_only_scripts(
             db, conv.regex_preset_id, conv.preset_id,
@@ -761,7 +771,8 @@ async def node_build_prompt(state: ChatState) -> dict:
                 rendered, scripts, macro_scope=scope,
             )
 
-        # ── 尾部模板强制兜底（squash 前必须先注入，确保进末端 system 块） ──
+        # ── 尾部模板强制兜底 ──
+        # 这段必须在 system 合并前追加，确保最终仍处于 prompt 末端的 system 区。
         # 启发式识别 wi_activated 里"输出模板"型条目（含 <details>+占位符 或
         # 自定义 HTML 标签），追加一段强约束指令到 prompt 末端，对抗预设的
         # 严格输出格式（如 <content></content> 包裹）压制模板输出
@@ -772,7 +783,7 @@ async def node_build_prompt(state: ChatState) -> dict:
                 rendered.append({"role": "system", "content": directive})
                 logger.info(f"[尾部模板兜底] 注入约束：{templates}")
 
-        # ── ADR-0006：tool 模式引导，替代被摘掉的 [mvu_update] 文本指令 ──
+        # 主回复只写可见叙事；变量更新由回复后的独立更新通道处理。
         if mvu_policy.divert_update_entries:
             rendered.append({"role": "system", "content": _MVU_DOUBLE_AI_DIRECTIVE})
 
@@ -783,6 +794,20 @@ async def node_build_prompt(state: ChatState) -> dict:
         if conv.preset_id:
             rendered = _squash_system_messages(rendered)
 
+        token_budget_report = build_token_budget_report(
+            plan=budget_plan,
+            final_prompt_tokens=_count_message_tokens(rendered),
+            history_tokens=_count_message_tokens(truncated),
+            history_candidate_tokens=_count_message_tokens(history_candidates),
+            history_kept_messages=len(truncated),
+            history_candidate_messages=len(history_candidates),
+            worldbook_used_tokens=sum(
+                _count_tokens((entry or {}).get("content") or "")
+                for entry in wi_activated
+            ),
+            worldbook_budget=resolve_worldbook_budget(cc),
+        )
+
         if truncated:
             _log_messages(rendered, persona.name if persona else "无角色")
 
@@ -792,12 +817,12 @@ async def node_build_prompt(state: ChatState) -> dict:
             "messages": rendered,
             "system_prompt": rendered[0]["content"][:200] if rendered else "",
             "persona_name": persona.name if persona else None,
-            # CARD-0002：写**有效**值 = 原始 uses_mvu AND 账户兼容开关。下游所有 MVU 门控
-            # （run_update_pass / browser_sync / retire_apply / post_process ops）读它 → 自动尊重开关。
+            # 下游只读取这个有效值，确保所有 MVU 更新、同步和落库路径使用同一套开关。
             "persona_uses_mvu": mvu_policy.active,
             "is_first_round": is_first,
             "error": None,
             "mvu_scope": scope,
+            "token_budget_report": token_budget_report,
         }
 
 
@@ -824,7 +849,7 @@ _TAG_STRIP_RE = _re.compile(r"<[^>]+>")
 _TEMPLATE_DOUBLE_BRACE = _re.compile(r"\{\{[^{}\n]{1,100}\}\}")
 _TEMPLATE_SINGLE_BRACE = _re.compile(r"\{[^{}\n]{1,100}\}")
 
-# ADR-0006：tool 模式下替代 [mvu_update] 文本指令的引导（[mvu_update] 已从注入摘除）
+# 主回复阶段的 MVU 提示：正文只负责叙事，变量更新交给独立更新通道。
 _MVU_TOOL_DIRECTIVE = (
     "[状态更新 — 工具模式]\n"
     "本轮若剧情导致角色状态变量（stat_data）发生变化，请**调用 update_variables 工具**"
@@ -857,9 +882,8 @@ def _extract_template_entries(wi_activated: list[dict]) -> list[dict]:
         if not content:
             continue
 
-        # MVU 指令/状态族条目（[mvu_update]/[mvu_status]/[mvu_plot]/[initvar]/[opening]）
-        # 不是输出模板：它们的 <UpdateVariable>/<Analysis>/<status_...> 等标签会误命中
-        # has_custom_tag。跳过，避免尾部模板兜底注入错误约束 + 空烧续写（ADR-0003 拦截）。
+        # MVU 指令 / 状态族条目不是尾部输出模板；其中的标签容易被 HTML
+        # 模板启发式误判，必须先排除。
         if is_mvu_tagged_entry(entry):
             continue
 
@@ -910,7 +934,7 @@ def _build_template_scaffold(content: str) -> str:
     """从模板 content 抽取**最小开头**作为续写 prefix：
     `<details><summary>【...】</summary>`（含一个紧邻的自定义开口标签如 <StatusBlock>）。
 
-    设计原则（修正后的版本，详见 grilling Q2 复盘）：
+    抽取原则：
     - 不带卡作者写给 LLM 的 # 指令注释（这些只该在 system context 里出现）
     - 不带字段名/占位符/闭合标签 —— 完整 schema 已经在 system 的世界书条目原文里，
       LLM 看到这个最小开头会"接着写字段值"，不会因为 prefix 已经完整而停手
@@ -986,17 +1010,6 @@ def _squash_system_messages(messages: list[dict]) -> list[dict]:
     return result
 
 
-def _calc_history_budget(prefix_messages: list[dict], max_tokens: int | None = None, max_context: int | None = None) -> int:
-    """计算对话历史可用的 token 预算。"""
-    prefix_tokens = _count_message_tokens(prefix_messages)
-    _max_tokens = max_tokens or settings.CHAT_MAX_TOKENS
-    _max_context = max_context or settings.MAX_CONTEXT_TOKENS
-    return (_max_context
-            - prefix_tokens
-            - _max_tokens
-            - settings.TOKEN_BUDGET_SAFETY_MARGIN)
-
-
 def _log_messages(all_messages: list, persona_name: str) -> None:
     """输出发送给 LLM 的完整 messages 列表，便于查看生效的提示词。"""
     total_tokens = _count_message_tokens(all_messages)
@@ -1032,12 +1045,15 @@ def _log_messages(all_messages: list, persona_name: str) -> None:
 
 
 # ─── 后处理 ──────────────────────────────────────────────────────
-# 注：回复生成不在 graph 节点中。chat_service 直接调 call_deepseek_stream
-# 实现逐 token 流式输出；流式完成后手动调 node_post_process。
+# 回复生成不在 graph 节点中。chat_service 负责逐 token 流式输出；
+# 本节点在流式完成后统一处理落库、状态更新和后台任务。
 
 
 async def node_post_process(state: ChatState) -> dict:
-    """保存消息和情绪记录，触发后台记忆提取（含摘要注入）。
+    """处理一次模型回复完成后的所有写路径。
+
+    这里集中完成：回复文本管道处理、assistant 消息落库、MVU 变量更新、
+    情绪与好感度感知、关系统计更新、后台记忆提取触发。
 
     返回 dict 会被 LangGraph 自动 merge 进 state；chat_service 手动调用本节点时
     也直接读返回 dict（不依赖 state merge）。
@@ -1060,20 +1076,20 @@ async def node_post_process(state: ChatState) -> dict:
         conv_id = state["conversation_id"]
         user_id = state["user_id"]
 
-        # 拉 conv 用于 message_pipeline 决策 regex_preset / preset
+        # 后处理管道需要对话配置来决定回复正则、显示版清理和 MVU 写入策略。
         conv_result = await db.execute(
             select(Conversation).where(Conversation.id == conv_id)
         )
         conv_for_pipeline = conv_result.scalar_one_or_none()
         mvu_active = bool(state.get("persona_uses_mvu"))
 
-        # ── 把 LLM 输出走 ADR-0015 管道（与开场白共用）──
-        # MacroEngine 对 LLM 实时输出意义不大（LLM 不会自己写 {{user}} 宏），
-        # 但 reply 正则 + UpdateVariable 解析必跑。
+        # ── 回复文本管道 ──
+        # 同一条管道会产出两份文本：content 是进入历史的真相版，display_content
+        # 是给前端渲染的显示版。这里不再跑宏，只处理回复正则、显示清理和变量块。
         processed_reply = state.get("assistant_reply") or ""
         display_reply = processed_reply
         scope_before = state.get("mvu_scope") if mvu_active else None
-        # ADR-0005：有界校验层的约束（来自本轮激活的 [mvu_update] 条目）+ 诊断收集
+        # MVU 约束从本轮激活的更新规则条目提取，用于校验状态写入。
         from app.services.mvu_runtime import extract_constraints_from_entries
         mvu_constraints = (
             extract_constraints_from_entries(state.get("wi_activated"))
@@ -1095,8 +1111,7 @@ async def node_post_process(state: ChatState) -> dict:
                 constraints=mvu_constraints,
                 update_diag=update_diag,
             )
-            # 写回 state：assistant_reply=prompt 真相版，assistant_display=显示版
-            # （chat_service 的 message_done 分别透出 final_content / final_display_content）
+            # 写回 state，供 message_done 分别透出 final_content / final_display_content。
             state["assistant_reply"] = processed_reply
             state["assistant_display"] = display_reply
             if scope_after is not None:
@@ -1104,13 +1119,12 @@ async def node_post_process(state: ChatState) -> dict:
             if update_diag["applied"] or update_diag["dropped"]:
                 update_channel = "text"
 
-        # ── ADR-0008c 阶段3：退役后端 apply（gated）──
-        # 开关 on 且浏览器运行时 on 且 uses_mvu 时，后端**不再 apply** —— ops 仍随 down-channel
-        # 下推，由前端 MVU Host 应用+派生并 UP 回传（含派生字段，比后端版更全）。默认 off：后端
-        # 照旧 apply（浏览器版经 UP 覆盖），保住无浏览器/关页时的兜底。ops 无论如何都留在 state 里。
+        # 浏览器运行时接管 MVU 时，后端只保留 ops 与诊断，不直接修改 stat_data。
         _retire_apply = _should_retire_backend_apply(state)
 
-        # ── ADR-0005：tool-calling 更新通道（与文本通道汇到同一校验+应用核心）──
+        # ── 主调用 tool 更新通道 ──
+        # 如果主模型返回了 update_variables tool call，把 tool 参数解析成 JSON Patch
+        # 并应用到同一个 stat_data 桶。
         tool_calls = state.get("mvu_tool_calls")
         if mvu_active and tool_calls and not _retire_apply:
             from app.services.mvu_runtime.tools import extract_update_ops_from_tool_calls
@@ -1129,6 +1143,7 @@ async def node_post_process(state: ChatState) -> dict:
 
         double_ai_ops = state.get("mvu_double_ai_ops")
         if mvu_active and double_ai_ops and not _retire_apply:
+            # double-ai 更新通道已经在 chat_service 中产出 ops；这里统一应用到状态桶。
             from app.services.message_pipeline import _apply_json_patch_ops
             scope_after = state.get("mvu_scope") or {"local": {}, "global": {}, "names": {}}
             local_bucket = scope_after.setdefault("local", {})
@@ -1140,7 +1155,7 @@ async def node_post_process(state: ChatState) -> dict:
             state["mvu_scope"] = scope_after
             update_channel = "double_ai"
 
-        # 退役模式下后端没 apply，但 ops 已下推给前端；诊断标注 channel=browser
+        # 后端不 apply 时，诊断仍标记本轮更新交给浏览器运行时处理。
         if _retire_apply and (state.get("mvu_double_ai_ops") or state.get("mvu_tool_calls")):
             update_channel = "browser"
 
@@ -1156,7 +1171,7 @@ async def node_post_process(state: ChatState) -> dict:
                 display_content=display_reply,
             )
             db.add(assistant_msg)
-            # 显式赋 id（SQLAlchemy 的 column default 在 flush 时才执行）
+            # 立即把 UUID 返回给 SSE；不等 flush 后的 column default。
             assistant_message_id = str(msg_id)
 
             if state.get("is_first_round"):
@@ -1165,13 +1180,12 @@ async def node_post_process(state: ChatState) -> dict:
                     conv_for_pipeline.title = msg[:30] + ("..." if len(msg) > 30 else "")
                     db.add(conv_for_pipeline)
 
-        # ADR-0019：感知总开关，直接读已加载的 conv（省一次查询）；conv 缺失 → False（fail-safe）
+        # 情感感知总开关：关闭时不写 EmotionRecord，也不更新好感度 delta。
         emotion_enabled = bool(conv_for_pipeline and conv_for_pipeline.analyze_emotion)
 
-        # ── ADR-0019：情感感知（情绪 + 好感度合并为一次上下文感知调用）──
-        # 写路径由 conv.analyze_emotion（"情感分析"感知总开关）gate：关则整段跳过——
-        # 不写 EmotionRecord、好感度也不动。读路径（把关系注入 prompt）由 relationship
-        # template block 另行 gate，与本段正交（详见 ADR-0019）。
+        # ── 情绪与好感度感知 ──
+        # 本段在回复后运行，因为好感度变化需要结合"用户本轮输入 + AI 刚写出的回复"。
+        # 关系提示词的读取在 graph 阶段完成；这里负责写入本轮感知结果。
         turn_delta: int = 0
         turn_reason: str = ""
         _perc_persona_id = state.get("persona_id")
@@ -1179,7 +1193,7 @@ async def node_post_process(state: ChatState) -> dict:
         if emotion_enabled:
             _user_msg_text = (state.get("user_message") or "").strip()
             if len(_user_msg_text) <= settings.EMOTION_SKIP_TRIVIAL_CHARS:
-                # 低信号轮（"嗯""哦"等填充消息）：不调 LLM，记"平静"、好感度不动（ADR-0019）
+                # 低信号短消息不调用感知模型，避免为"嗯""哦"这类填充轮消耗 token。
                 state["emotion"] = "平静"
                 state["emotion_intensity"] = 5
                 state["emotion_confidence"] = 0.3
@@ -1188,7 +1202,7 @@ async def node_post_process(state: ChatState) -> dict:
                     "情感感知：用户消息过短(%d<=%d)，跳过 assess_turn",
                     len(_user_msg_text), settings.EMOTION_SKIP_TRIVIAL_CHARS,
                 )
-            # 有用户消息且有 AI 回复时才调 LLM 感知（无用户消息或仅系统消息时不调）
+            # 有用户消息且有 AI 回复时才调用感知模型。
             elif (state.get("assistant_reply") or "").strip():
                 try:
                     from app.models.relationship import Relationship
@@ -1211,12 +1225,11 @@ async def node_post_process(state: ChatState) -> dict:
                     recent_msgs = list(reversed(recent_result.scalars().all()))
                     recent_messages = [(m.role, m.content or "") for m in recent_msgs]
 
-                    # 好感度门槛为"有 AI 角色即评"（高版本卡人设在世界书里、
-                    # personality/background 都可能空——assess_turn 会从回复推断角色态度）。
+                    # 有 AI 角色时才评估好感度；没有显式人设时，感知模型会从回复推断态度。
                     want_affinity = bool(_perc_persona_id)
                     cur_affinity = 0.0
                     if want_affinity:
-                        # 读当前好感度
+                        # 当前好感度作为本轮 delta 判断的基线。
                         _aff = await db.execute(
                             select(Relationship.affinity_score).where(
                                 Relationship.user_id == user_id,
@@ -1266,7 +1279,7 @@ async def node_post_process(state: ChatState) -> dict:
                 if user_msg:
                     emotion_record = EmotionRecord(
                         message_id=user_msg.id, conversation_id=conv_id,
-                        # state["emotion"] 初始为 None；assess_turn 未跑/失败时回退"平静"（ADR-0019）
+                        # 感知未运行或失败时，用平静作为可落库的默认状态。
                         emotion=state.get("emotion") or "平静",
                         intensity=state.get("emotion_intensity") or 5,
                         confidence=state.get("emotion_confidence") or 0.3,
@@ -1304,13 +1317,10 @@ async def node_post_process(state: ChatState) -> dict:
             except Exception:
                 logger.exception("情绪记录保存失败")
 
-        # MVU `<UpdateVariable>` 解析已上移到 message_pipeline（ADR-0015），
-        # state["mvu_scope"] 此时已携带可能更新过的 stat_data。
         mvu_scope = state.get("mvu_scope")
 
-        # ── MVU scope 落库（详见 docs/adr/0007 决策 3） ──
-        # 在 post_process 成功路径写回，保证 incvar 幂等：若 build_prompt 后
-        # LLM 调用失败，本节点不跑，counter 不会多增。
+        # ── MVU scope 落库 ──
+        # 只有回复后处理成功时才写回变量桶，避免生成失败后把本轮临时状态持久化。
         if mvu_active and mvu_scope:
             try:
                 conv_result = await db.execute(
@@ -1351,8 +1361,7 @@ async def node_post_process(state: ChatState) -> dict:
                     for_update=True,
                 )
 
-                # ADR-0019：好感度写入随"情感分析"感知开关一起 gate（不再仅看 persona.personality）。
-                # delta/reason 来自本轮合并的 assess_turn（perception 段），不再单独调 assess_affinity。
+                # 好感度 delta 来自本轮感知结果；delta 为 0 但有 reason 时也记录一次说明。
                 delta, reason = turn_delta, turn_reason
                 if delta != 0 or reason:
                     await update_affinity(db, rel, delta, reason)
@@ -1380,6 +1389,7 @@ async def node_post_process(state: ChatState) -> dict:
 
         new_count = 0
         try:
+            # 记忆提取不阻塞本轮响应；这里只判断是否达到触发间隔并投递后台任务。
             count_result = await db.execute(
                 select(Message).where(Message.conversation_id == conv_id)
             )
@@ -1401,6 +1411,7 @@ async def node_post_process(state: ChatState) -> dict:
             )
             current_memories = mem_count_result.scalar()
             if current_memories < 10:
+                # 记忆越少提取越频繁；记忆变多后降低提取频率，控制成本与重复。
                 dynamic_interval = settings.MEMORY_EXTRACTION_AGGRESSIVE
             elif current_memories < 30:
                 dynamic_interval = settings.MEMORY_EXTRACTION_MODERATE
@@ -1411,6 +1422,7 @@ async def node_post_process(state: ChatState) -> dict:
             should_extract = msg_count - last_extraction >= dynamic_interval * 2
 
             if should_extract:
+                # 给提取模型多带几条上次窗口之前的上下文，减少断章取义。
                 context_start = max(0, last_extraction - 4)
                 all_msgs_query = await db.execute(
                     select(Message)
@@ -1456,7 +1468,7 @@ async def node_post_process(state: ChatState) -> dict:
             "affinity_delta": affinity_delta_out,
             "affinity_reason": affinity_reason_out,
             "affinity_score": affinity_score_out,
-            # ADR-0019：情绪后置到本节点，随 message_done 透出给前端更新 emoji
+            # 情绪结果随 message_done 返回，前端据此更新回合结束后的情绪展示。
             "emotion": state.get("emotion"),
             "emotion_intensity": state.get("emotion_intensity"),
             "emotion_confidence": state.get("emotion_confidence"),

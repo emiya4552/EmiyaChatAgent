@@ -166,8 +166,37 @@ export interface ChatConfig {
   repetition_penalty?: number
   openai_max_tokens?: number
   openai_max_context?: number
+  token_budget_safety_margin?: number
+  history_budget_cap?: number
   // 世界书注入预算 % (config.WORLDBOOK_BUDGET_PCT 的对话级覆盖)
   worldbook_budget_pct?: number
+  worldbook_budget_cap?: number
+  worldbook_overflow_alert?: boolean
+}
+
+export interface TokenBudgetReport {
+  max_context: number
+  reserved_output: number
+  safety_margin: number
+  prompt_prefix_tokens: number
+  history_available: number
+  history_cap: number
+  history_budget: number
+  reply_length: string
+  history_tokens: number
+  history_candidate_tokens: number
+  history_dropped_tokens: number
+  history_kept_messages: number
+  history_candidate_messages: number
+  final_prompt_tokens: number
+  remaining_context: number
+  worldbook: {
+    budget: number
+    used: number
+    remaining: number
+    pct: number
+    cap: number
+  }
 }
 
 export interface Conversation {
