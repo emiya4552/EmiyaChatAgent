@@ -467,12 +467,18 @@ async def import_confirm(
                     db,
                     worldbook_id=existing_wb.id,
                     user_id=current_user.id,
-                    data=wb_fields,
+                    data={
+                        **wb_fields,
+                        "_llm_detection_enabled": current_user.output_contract_llm_detection_enabled,
+                        "_llm_detection_limit": current_user.output_contract_llm_detection_limit,
+                    },
                 )
             else:
                 wb = await wb_service.create_worldbook(
                     db,
                     user_id=current_user.id,
+                    llm_detection_enabled=current_user.output_contract_llm_detection_enabled,
+                    llm_detection_limit=current_user.output_contract_llm_detection_limit,
                     **wb_fields,
                 )
             persona.default_worldbook_ids = [str(wb.id)]

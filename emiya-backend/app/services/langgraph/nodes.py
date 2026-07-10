@@ -62,7 +62,6 @@ from app.services.mvu_runtime.policy import build_mvu_policy_for_user_persona
 from app.services.mvu_runtime.scope import build_macro_scope
 from app.services.mvu_runtime.worldbook import (
     filter_worldbook_entries_for_prompt,
-    is_mvu_tagged_entry,
 )
 from app.services.token_budget import (
     build_prompt_budget_plan,
@@ -223,6 +222,7 @@ async def node_activate_worldbook(state: ChatState) -> dict:
                 "outlet_name": ae.outlet_name,
                 "worldbook_id": ae.worldbook_id,
                 "worldbook_name": ae.worldbook_name,
+                "output_contract": ae.entry.get("output_contract"),
             }
             for ae in activated
         ]
@@ -771,17 +771,33 @@ async def node_build_prompt(state: ChatState) -> dict:
                 rendered, scripts, macro_scope=scope,
             )
 
-        # ── 尾部模板强制兜底 ──
+        # ── 可见输出尾部契约提示 ──
         # 这段必须在 system 合并前追加，确保最终仍处于 prompt 末端的 system 区。
-        # 启发式识别 wi_activated 里"输出模板"型条目（含 <details>+占位符 或
-        # 自定义 HTML 标签），追加一段强约束指令到 prompt 末端，对抗预设的
-        # 严格输出格式（如 <content></content> 包裹）压制模板输出
+        # 世界书中的状态栏 / 日志栏等尾部模板由 output_contracts 统一识别；
+        # 这里仅消费契约模块产出的提示文本。
         if settings.WORLDBOOK_TAIL_TEMPLATE_ENFORCEMENT and wi_activated:
-            templates = _detect_output_templates(wi_activated)
-            if templates:
-                directive = _build_tail_template_directive(templates)
+            from app.services.output_contracts import (
+                build_tail_template_directive,
+                build_visible_output_contract,
+            )
+
+            output_contract = build_visible_output_contract(wi_activated, cc)
+
+            logger.info(
+                "[提示词注入] 契约 active=%s mode=%s tail_blocks=%d",
+                output_contract.active,
+                output_contract.mode,
+                len(output_contract.required_tail_blocks),
+            )
+
+            tail_blocks = output_contract.required_tail_blocks
+            if tail_blocks:
+                directive = build_tail_template_directive(tail_blocks)
                 rendered.append({"role": "system", "content": directive})
-                logger.info(f"[尾部模板兜底] 注入约束：{templates}")
+                logger.info(
+                    "[尾部模板兜底] 注入约束：%s",
+                    [block.marker for block in tail_blocks],
+                )
 
         # 主回复只写可见叙事；变量更新由回复后的独立更新通道处理。
         if mvu_policy.divert_update_entries:
@@ -828,27 +844,6 @@ async def node_build_prompt(state: ChatState) -> dict:
 
 # ─── 辅助函数 ────────────────────────────────────────────────────
 
-# 启发式：识别"输出模板"型 worldbook 条目
-import re as _re
-
-# (1) PascalCase 标签（StatusBlock、CharBox 等）：首字母大写 + 含至少 2 个大写字母或骆驼壳
-# (2) 带数字后缀的小写标签（dp1~dp8、ce1~ce4 等）：纯小写字母开头 + 数字结尾
-_CUSTOM_TAG_RE = _re.compile(
-    r"<(?P<tag>(?:[A-Z][a-zA-Z]*[A-Z][a-zA-Z]*)|(?:[a-z]+\d+))\b"
-)
-# 含 <details> 容器 + 占位符（{xxx} 或 {{xxx}}）
-_DETAILS_RE = _re.compile(r"<details\b", _re.IGNORECASE)
-_SUMMARY_RE = _re.compile(r"<summary\b[^>]*>(.*?)</summary>", _re.IGNORECASE | _re.DOTALL)
-# 单括号占位（{时间} {用户名与@ID} 这种）；用 lookaround 排除 {{user}} 之类宏
-_PLACEHOLDER_RE = _re.compile(r"(?<!\{)\{[^{}\n]{1,80}\}(?!\})")
-_TAG_STRIP_RE = _re.compile(r"<[^>]+>")
-
-
-# 占位符识别（构造 scaffold 用）：删去 {xxx} 单括号和 {{xxx}} 双括号占位符
-# 含 {{user}}/{{char}} 等宏也会被一并删（无碍——prefix 给 LLM 当字面文本看）
-_TEMPLATE_DOUBLE_BRACE = _re.compile(r"\{\{[^{}\n]{1,100}\}\}")
-_TEMPLATE_SINGLE_BRACE = _re.compile(r"\{[^{}\n]{1,100}\}")
-
 # 主回复阶段的 MVU 提示：正文只负责叙事，变量更新交给独立更新通道。
 _MVU_TOOL_DIRECTIVE = (
     "[状态更新 — 工具模式]\n"
@@ -866,131 +861,6 @@ _MVU_DOUBLE_AI_DIRECTIVE = (
     "scene changes character state, the system will run a separate update pass "
     "after your reply."
 )
-
-
-def _extract_template_entries(wi_activated: list[dict]) -> list[dict]:
-    """识别"输出模板"型条目，返回每个的 {marker, content, order}。
-
-    marker: 用于检测 LLM 输出是否含此模板（从 <summary> 提取）
-    content: 模板原文，用于构造续写 prefix scaffold
-    order: worldbook 条目优先级，用于多模板时排序
-    """
-    entries: list[dict] = []
-    seen_markers: set[str] = set()
-    for entry in wi_activated:
-        content = entry.get("content", "")
-        if not content:
-            continue
-
-        # MVU 指令 / 状态族条目不是尾部输出模板；其中的标签容易被 HTML
-        # 模板启发式误判，必须先排除。
-        if is_mvu_tagged_entry(entry):
-            continue
-
-        has_details = bool(_DETAILS_RE.search(content))
-        has_placeholder = bool(_PLACEHOLDER_RE.search(content)) or bool(
-            _TEMPLATE_DOUBLE_BRACE.search(content)
-        )
-        has_custom_tag = bool(_CUSTOM_TAG_RE.search(content))
-
-        is_template = (has_details and has_placeholder) or has_custom_tag
-        if not is_template:
-            continue
-
-        # 提取 marker：优先 <summary> 内文 → entry.comment → entry.uid 兜底
-        marker = ""
-        m = _SUMMARY_RE.search(content)
-        if m:
-            marker = _TAG_STRIP_RE.sub("", m.group(1)).strip()
-        if not marker:
-            marker = (entry.get("comment") or "").strip()
-        if not marker:
-            marker = f"条目#{entry.get('uid', '?')}"
-
-        if marker in seen_markers:
-            continue
-        seen_markers.add(marker)
-        entries.append({
-            "marker": marker,
-            "content": content,
-            "order": entry.get("order", 100),
-        })
-    return entries
-
-
-def _detect_output_templates(wi_activated: list[dict]) -> list[str]:
-    """返回所有"输出模板"型条目的 marker 列表（用于 tail_template 强约束文案）。"""
-    return [e["marker"] for e in _extract_template_entries(wi_activated)]
-
-
-def _find_missing_templates(reply: str, entries: list[dict]) -> list[dict]:
-    """扫 LLM 主回复，返回 marker 未出现的模板条目列表（按 order 升序）。"""
-    missing = [e for e in entries if e["marker"] and e["marker"] not in reply]
-    missing.sort(key=lambda e: e.get("order", 100))
-    return missing
-
-
-def _build_template_scaffold(content: str) -> str:
-    """从模板 content 抽取**最小开头**作为续写 prefix：
-    `<details><summary>【...】</summary>`（含一个紧邻的自定义开口标签如 <StatusBlock>）。
-
-    抽取原则：
-    - 不带卡作者写给 LLM 的 # 指令注释（这些只该在 system context 里出现）
-    - 不带字段名/占位符/闭合标签 —— 完整 schema 已经在 system 的世界书条目原文里，
-      LLM 看到这个最小开头会"接着写字段值"，不会因为 prefix 已经完整而停手
-    - 不带 `(女性角色全名)` 这种括号注解 —— 它们会让 LLM 误以为是 value
-
-    例如：
-      原始 content:
-        # 此为'状态栏'，只允许输出在最底部...
-
-        <details>
-        <summary><b>【状态栏】</b></summary>
-        <StatusBlock>
-        👤姓名:{{char name}} (女性角色全名)
-        ...
-        </StatusBlock>
-        </details>
-
-      产出 scaffold:
-        <details>
-        <summary><b>【状态栏】</b></summary>
-        <StatusBlock>
-    """
-    # 找第一个 <details> 开始
-    details_match = _re.search(r"<details[^>]*>", content, _re.IGNORECASE)
-    if not details_match:
-        return ""  # 不是合法模板，跳过
-
-    # 找紧接的 </summary>
-    summary_end_idx = content.find("</summary>", details_match.end())
-    if summary_end_idx == -1:
-        # 没有 summary 直接截取 <details> 开头
-        return content[details_match.start():details_match.end()]
-
-    end = summary_end_idx + len("</summary>")
-
-    # 把紧跟的自定义开口标签（如 <StatusBlock> / <body> / <dp1>）也一起含进来
-    rest = content[end:]
-    inner_match = _re.match(r"\s*<[A-Za-z][^/>]*>", rest)
-    if inner_match:
-        end = end + inner_match.end()
-
-    return content[details_match.start():end]
-
-
-def _build_tail_template_directive(templates: list[str]) -> str:
-    """生成尾部模板强制约束的 system 文案。"""
-    bullets = "\n".join(f"- {t}" for t in templates)
-    return (
-        "[输出尾部模板强制约束]\n"
-        "本轮回复必须在正文之后追加以下世界书要求的 HTML 模板"
-        "（按各模板内字段定义填空，模板原文见上文世界书条目）：\n"
-        f"{bullets}\n"
-        "即便上文 / 预设要求严格的输出格式（如 <content></content> 包裹、"
-        "单一标签结构、思维链分段等），HTML 模板块**必须**追加输出，不得省略。"
-        "如有 <content> 闭合标签，模板追加在标签之后。"
-    )
 
 
 def _squash_system_messages(messages: list[dict]) -> list[dict]:

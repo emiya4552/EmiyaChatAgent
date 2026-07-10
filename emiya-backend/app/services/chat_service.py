@@ -2,6 +2,7 @@
 """聊天业务逻辑 — 分析 graph + 真流式回复生成。"""
 import json
 import logging
+from dataclasses import replace
 from typing import AsyncGenerator
 from uuid import UUID
 
@@ -14,13 +15,16 @@ from app.models.message import Message
 from app.models.user import User
 from app.services.langgraph.chat_graph import build_analysis_graph
 from app.services.langgraph.nodes import (
-    _build_template_scaffold,
-    _extract_template_entries,
-    _find_missing_templates,
     node_post_process,
 )
 from app.services.langgraph.state import ChatState
-from app.services.llm_service import call_deepseek_stream, call_deepseek_stream_prefix
+from app.services.llm_service import call_deepseek_stream
+from app.services.output_contracts import (
+    build_visible_output_contract,
+    continue_missing_tail_blocks,
+    diagnostics_to_dict,
+    validate_visible_output,
+)
 from app.services.prompt_renderer import DEFAULT_TEMPLATE_BLOCKS
 from app.services.token_budget import resolve_reply_max_tokens
 
@@ -304,18 +308,60 @@ async def process_chat(
         yield f"event: message_done\ndata: {json.dumps({'message_id': '', 'conversation_id': str(conversation_id), 'new_memories': 0}, ensure_ascii=False)}\n\n"
         return
 
-    # 5.5 尾部模板兜底：检测缺失模板，prefix continuation 强制续写
+    # 5.5 可见输出契约诊断 + 尾部模板兜底。
+    # 先对原始回复做一次校验，续写后再校验一次；message_done 下发最终诊断。
     final_state["assistant_reply"] = "".join(buffer)
-    # ADR-0005：把本次 tool_call 交给 node_post_process 走同一校验+应用核心
+    output_contract = build_visible_output_contract(
+        final_state.get("wi_activated"),
+        chat_config,
+    )
+    output_contract_diag = validate_visible_output(
+        final_state["assistant_reply"],
+        output_contract,
+    )
+
+    tail_repair_needed = bool(
+        output_contract.required_tail_blocks and output_contract_diag.missing
+    )
+
+    logger.info(
+        "[契约校验] mode=%s ok=%s required=%d missing=%d repair_needed=%s",
+        output_contract_diag.mode,
+        output_contract_diag.ok,
+        output_contract_diag.required,
+        len(output_contract_diag.missing),
+        tail_repair_needed,
+    )
+
+    # 把本次 tool_call 交给 node_post_process 走同一校验+应用核心
     final_state["mvu_tool_calls"] = tool_calls_acc
-    if buffer and settings.WORLDBOOK_TAIL_CONTINUATION_ENABLED:
-        async for delta in _continuation_loop(
-            final_state=final_state,
+    if (
+        buffer
+        and output_contract.required_tail_blocks
+        and settings.WORLDBOOK_TAIL_CONTINUATION_ENABLED
+    ):
+        async for delta in continue_missing_tail_blocks(
+            reply=final_state["assistant_reply"],
+            contract=output_contract,
             messages=messages,
             conversation_id=conversation_id,
             chat_config=chat_config,
+            broadcast=_broadcast,
+            update_reply=lambda reply: final_state.__setitem__("assistant_reply", reply),
         ):
             yield delta
+        repaired_diag = validate_visible_output(
+            final_state["assistant_reply"],
+            output_contract,
+        )
+        if tail_repair_needed and repaired_diag.ok:
+            output_contract_diag = replace(
+                repaired_diag,
+                repaired=True,
+                repair_mode="continuation",
+            )
+        else:
+            output_contract_diag = repaired_diag
 
     # 6. 保存回复 + 后处理（情绪记录、关系更新、记忆提取）
     if final_state.get("persona_uses_mvu") and (final_state.get("assistant_reply") or "").strip():
@@ -411,6 +457,8 @@ async def process_chat(
     # ADR-0008c 阶段1：附加 down-channel（仅 MVU_BROWSER_RUNTIME on 时存在）
     if final_state.get("token_budget_report"):
         msg_done_data["token_budget"] = final_state["token_budget_report"]
+    if output_contract.active:
+        msg_done_data["output_contract"] = diagnostics_to_dict(output_contract_diag)
     if mvu_browser_sync is not None:
         msg_done_data["mvu_browser_sync"] = mvu_browser_sync
     yield f"event: message_done\ndata: {json.dumps(msg_done_data, ensure_ascii=False)}\n\n"
@@ -454,86 +502,3 @@ async def _load_enabled_blocks(db: AsyncSession, template_id) -> set[str]:
         else:
             enabled.add(b.get("type", ""))
     return enabled
-
-
-async def _continuation_loop(
-    final_state: dict,
-    messages: list[dict],
-    conversation_id: UUID,
-    chat_config: dict,
-):
-    """主回复结束后扫缺失模板，按 order 升序串行调 prefix continuation。
-
-    每个续写的 token 直接 yield 为 SSE message_delta；前端无感知，看起来是"AI
-    自然继续写"。失败时静默 fallback，不影响主回复保存。
-
-    详见 grilling Q1=A / Q2=β / Q3=α / Q4=α-1 / Q5=K=3。
-    """
-    wi_activated = final_state.get("wi_activated") or []
-    if not wi_activated:
-        return
-
-    template_entries = _extract_template_entries(wi_activated)
-    if not template_entries:
-        return
-
-    current_reply = final_state["assistant_reply"]
-    missing = _find_missing_templates(current_reply, template_entries)
-    if not missing:
-        return
-
-    K = settings.WORLDBOOK_TAIL_CONTINUATION_MAX
-    missing = missing[:K]
-    logger.info(
-        f"[尾部模板续写] 主回复缺 {len(missing)} 个模板，开始 prefix continuation: "
-        f"{[e['marker'] for e in missing]}"
-    )
-
-    cont_temperature = chat_config.get("temperature", settings.CHAT_TEMPERATURE)
-    cont_max_tokens = settings.WORLDBOOK_TAIL_CONTINUATION_MAX_TOKENS
-
-    for entry in missing:
-        try:
-            scaffold = _build_template_scaffold(entry["content"])
-            if not scaffold.strip():
-                continue
-
-            # 1. 先把 scaffold 作为可见 message_delta 推给前端（让用户看到结构开始浮现）
-            scaffold_payload = "\n\n" + scaffold
-            yield f"event: message_delta\ndata: {json.dumps({'content': scaffold_payload}, ensure_ascii=False)}\n\n"
-            await _broadcast(conversation_id, "message_delta", {"content": scaffold_payload})
-            current_reply += scaffold_payload
-
-            # 2. DeepSeek 续写：从 scaffold 末尾接着填字段值
-            prefix_text = current_reply
-            try:
-                async for token in call_deepseek_stream_prefix(
-                    messages=messages,
-                    prefix_text=prefix_text,
-                    temperature=cont_temperature,
-                    max_tokens=cont_max_tokens,
-                    stop=["</details>"],
-                ):
-                    yield f"event: message_delta\ndata: {json.dumps({'content': token}, ensure_ascii=False)}\n\n"
-                    await _broadcast(conversation_id, "message_delta", {"content": token})
-                    current_reply += token
-            except Exception as e:
-                logger.warning(
-                    f"[尾部模板续写] marker={entry['marker']} stream 失败，"
-                    f"主回复保留 scaffold 但不闭合: {e}"
-                )
-                continue
-
-            # 3. 续写不含 </details>（被 stop 截掉），自己补一个
-            closing = "\n</details>"
-            yield f"event: message_delta\ndata: {json.dumps({'content': closing}, ensure_ascii=False)}\n\n"
-            await _broadcast(conversation_id, "message_delta", {"content": closing})
-            current_reply += closing
-        except Exception as e:
-            logger.warning(
-                f"[尾部模板续写] marker={entry['marker']} 失败，静默跳过: {e}"
-            )
-            continue
-
-    # 更新 final_state.assistant_reply 让 post_process 写入完整版
-    final_state["assistant_reply"] = current_reply

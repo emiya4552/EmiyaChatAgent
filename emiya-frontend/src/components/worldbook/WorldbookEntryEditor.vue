@@ -23,6 +23,27 @@
           />
         </n-form-item>
 
+        <div class="contract-panel">
+          <div class="contract-main">
+            <div class="contract-title">
+              <span>输出格式识别</span>
+              <n-tag size="small" :type="contractTagType">
+                {{ contractLabel }}
+              </n-tag>
+            </div>
+            <div class="contract-meta">
+              {{ contractMeta }}
+            </div>
+          </div>
+          <n-button
+            size="small"
+            :loading="detectingOutputContract"
+            @click="$emit('detect-output-contract')"
+          >
+            AI 识别此条目
+          </n-button>
+        </div>
+
         <n-form-item label-placement="left">
           <template #label>
             常驻 constant
@@ -254,8 +275,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
-  NInput, NSwitch, NCollapse, NCollapseItem, NFormItem,
-  NDynamicTags, NSelect, NInputNumber,
+  NButton, NInput, NSwitch, NCollapse, NCollapseItem, NFormItem,
+  NDynamicTags, NSelect, NInputNumber, NTag,
 } from 'naive-ui'
 import WorldbookHelpHint from './WorldbookHelpHint.vue'
 import type { WorldbookEntry } from '../../types'
@@ -267,6 +288,11 @@ const props = defineProps<{
     case_sensitive: boolean
     match_whole_words: boolean
   }
+  detectingOutputContract?: boolean
+}>()
+
+defineEmits<{
+  (e: 'detect-output-contract'): void
 }>()
 
 // 三个 nullable 字段：getter 用书级回退展示有效值；setter 如实写入 entry。
@@ -312,12 +338,58 @@ const TRIBOOL_OPTIONS = [
   { label: '是', value: 'true' },
   { label: '否', value: 'false' },
 ]
+
+const outputContract = computed(() => props.entry?.output_contract || null)
+const contractLabel = computed(() => {
+  const oc = outputContract.value
+  if (!oc) return '未识别'
+  if (oc.status === 'detected' || oc.status === 'manual') return String(oc.type || 'detected')
+  if (oc.status === 'none') return '非模板'
+  if (oc.status === 'stale') return '需重检'
+  return '未知'
+})
+const contractTagType = computed(() => {
+  const status = outputContract.value?.status
+  if (status === 'detected' || status === 'manual') return 'success'
+  if (status === 'stale' || status === 'unknown') return 'warning'
+  if (status === 'none') return 'default'
+  return 'info'
+})
+const contractMeta = computed(() => {
+  const oc = outputContract.value
+  if (!oc) return '尚未保存识别结果。保存或点击识别后，聊天运行时会读取这里的结果。'
+  const source = oc.source ? `来源：${oc.source}` : '来源：未知'
+  const confidence = typeof oc.confidence === 'number'
+    ? `置信度：${Math.round(oc.confidence * 100)}%`
+    : '置信度：未知'
+  const reason = oc.reason ? `原因：${oc.reason}` : ''
+  return [source, confidence, reason].filter(Boolean).join(' · ')
+})
 </script>
 
 <style scoped>
 .entry-editor { padding: 16px; }
 .editor-header { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
 .hint { color: var(--color-text-tertiary); font-size: 12px; margin-left: 8px; }
+.contract-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  background: var(--color-bg-base);
+}
+.contract-main { min-width: 0; }
+.contract-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.contract-meta {
+  margin-top: 4px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .inherit-tag {
   display: inline-block; margin-left: 6px;
   font-size: 11px; padding: 1px 6px; border-radius: 4px;

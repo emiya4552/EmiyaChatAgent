@@ -110,10 +110,10 @@ class Settings(BaseSettings):
     WORLDBOOK_OVERFLOW_ALERT: bool = False
     # 尾部模板强制兜底：自动检测含 HTML 模板的激活条目，在 prompt 末端
     # 追加强制约束指令，压住预设的"严格格式"约束（如 <content></content>）
-    # 详见 nodes.py::_detect_output_templates / _build_tail_template_directive
+    # 详见 output_contracts.tail 的 detect/build directive 逻辑
     WORLDBOOK_TAIL_TEMPLATE_ENFORCEMENT: bool = True
     # 尾部模板 prefix continuation 兜底：主回复扫缺失模板后用 DeepSeek prefix
-    # completion 强制续写。详见 grilling 决策 Q1=A/Q2=β/Q3=α/Q4=α-1/Q5=K=3
+    # completion 强制续写。实现集中在 output_contracts.tail。
     WORLDBOOK_TAIL_CONTINUATION_ENABLED: bool = True
     WORLDBOOK_TAIL_CONTINUATION_MAX: int = 3  # 每轮最多续写 K 个模板
     WORLDBOOK_TAIL_CONTINUATION_MAX_TOKENS: int = 800  # 单次续写 max_tokens

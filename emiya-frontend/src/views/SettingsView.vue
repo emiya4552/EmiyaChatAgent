@@ -117,6 +117,34 @@
           <n-divider />
 
           <div class="section">
+            <n-form-item label="AI 输出格式识别">
+              <n-switch
+                v-model:value="outputContractLlmDetectionEnabled"
+                :loading="savingOutputContractDetection"
+                @update:value="saveOutputContractDetectionEnabled"
+              />
+            </n-form-item>
+            <n-form-item label="每次最多检测条数">
+              <n-input-number
+                v-model:value="outputContractLlmDetectionLimit"
+                :min="0"
+                :max="200"
+                :step="5"
+                :disabled="!outputContractLlmDetectionEnabled"
+                style="width: 180px"
+                @blur="saveOutputContractDetectionLimit"
+              />
+            </n-form-item>
+            <p class="hint">
+              开启后，导入或编辑世界书时会让 AI 尝试识别“状态栏、Markdown 表格、JSON 块、章节/选项/后台日志”等输出格式要求，
+              并保存到条目里供聊天时使用。检测条数越大，覆盖越全面，但导入等待时间和模型调用次数也会增加。
+              自动识别没命中的条目，仍可在世界书编辑页对单条 entry 手动执行 AI 识别。
+            </p>
+          </div>
+
+          <n-divider />
+
+          <div class="section">
             <h3 class="section-title">全局 CSS 主题</h3>
             <p class="hint">
               这里写的 CSS 对所有对话生效；角色卡自带样式会在全局样式之后注入，因此可以覆盖这里的规则。
@@ -295,7 +323,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  NButton, NDivider, NForm, NFormItem, NIcon, NInput, NSwitch,
+  NButton, NDivider, NForm, NFormItem, NIcon, NInput, NInputNumber, NSwitch,
   NTabPane, NTag, NTabs, NUpload, useDialog, useMessage,
 } from 'naive-ui'
 import {
@@ -362,6 +390,39 @@ async function saveMvuCompat(v: boolean) {
     message.error(err.response?.data?.detail || '保存失败')
   } finally {
     savingMvuCompat.value = false
+  }
+}
+
+// 世界书输出契约 LLM 自动识别：仅影响导入/编辑期，手动单条识别不受此开关限制
+const outputContractLlmDetectionEnabled = ref(user.value?.output_contract_llm_detection_enabled ?? false)
+const outputContractLlmDetectionLimit = ref(user.value?.output_contract_llm_detection_limit ?? 30)
+const savingOutputContractDetection = ref(false)
+
+async function saveOutputContractDetectionEnabled(v: boolean) {
+  savingOutputContractDetection.value = true
+  try {
+    await authStore.updateMe({ output_contract_llm_detection_enabled: v })
+    message.success(v ? '导入世界书时将自动识别输出格式' : '已关闭导入时 AI 输出格式识别')
+  } catch (err: any) {
+    outputContractLlmDetectionEnabled.value = !v
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingOutputContractDetection.value = false
+  }
+}
+
+async function saveOutputContractDetectionLimit() {
+  const limit = Math.max(0, Math.min(200, Number(outputContractLlmDetectionLimit.value || 0)))
+  outputContractLlmDetectionLimit.value = limit
+  savingOutputContractDetection.value = true
+  try {
+    await authStore.updateMe({ output_contract_llm_detection_limit: limit })
+    message.success(`每次最多检测 ${limit} 条候选条目`)
+  } catch (err: any) {
+    outputContractLlmDetectionLimit.value = user.value?.output_contract_llm_detection_limit ?? 30
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingOutputContractDetection.value = false
   }
 }
 
