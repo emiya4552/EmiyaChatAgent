@@ -96,6 +96,8 @@ async def create_new_worldbook(
         case_sensitive=data.case_sensitive,
         match_whole_words=data.match_whole_words,
         extensions=data.extensions,
+        llm_detection_enabled=current_user.output_contract_llm_detection_enabled,
+        llm_detection_limit=current_user.output_contract_llm_detection_limit,
     )
     return _wb_to_response(wb)
 
@@ -114,6 +116,8 @@ async def update_existing_worldbook(
             e.model_dump() if hasattr(e, "model_dump") else e
             for e in update_data["entries"]
         ]
+        update_data["_llm_detection_enabled"] = current_user.output_contract_llm_detection_enabled
+        update_data["_llm_detection_limit"] = current_user.output_contract_llm_detection_limit
     wb = await wb_service.update_worldbook(db, worldbook_id, current_user.id, update_data)
     if wb is None:
         raise NotFoundException("世界书不存在")
@@ -127,6 +131,23 @@ async def delete_existing_worldbook(
     db: AsyncSession = Depends(get_db),
 ):
     await wb_service.delete_worldbook(db, worldbook_id, current_user.id)
+
+
+@router.post("/{worldbook_id}/entries/{entry_uid}/detect-output-contract", response_model=WorldbookResponse)
+async def detect_entry_output_contract(
+    worldbook_id: UUID,
+    entry_uid: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """用户主动对单条世界书 entry 执行 AI 输出契约识别。"""
+    wb = await wb_service.detect_worldbook_entry_output_contract(
+        db,
+        worldbook_id,
+        current_user.id,
+        entry_uid,
+    )
+    return _wb_to_response(wb)
 
 
 # ─── 导入 / 导出 ──────────────────────────────────────────
@@ -155,6 +176,8 @@ async def import_worldbook(
     wb = await wb_service.create_worldbook(
         db,
         user_id=current_user.id,
+        llm_detection_enabled=current_user.output_contract_llm_detection_enabled,
+        llm_detection_limit=current_user.output_contract_llm_detection_limit,
         **wb_fields,
     )
     return _wb_to_response(wb)

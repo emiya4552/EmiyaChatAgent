@@ -2,7 +2,7 @@
 """用户 ORM 模型。"""
 import uuid
 
-from sqlalchemy import Boolean, String, Text
+from sqlalchemy import Boolean, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,6 +49,16 @@ class User(Base, TimestampMixin):
     # 剔除 MVU 标签世界书条目 + 跳过 EJS + 隐藏卡 UI。不影响导入/检测/导出。默认开。
     mvu_compat_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true", default=True
+    )
+
+    # === 输出契约 LLM 自动识别偏好（详见 docs/feat-adr/adr1-1） ===
+    # 仅作用于世界书导入/编辑期。关闭时仍会运行本地启发式识别；用户也可在单条
+    # entry 上手动触发 AI 识别。limit 控制每次批量导入最多送检多少条候选 entry。
+    output_contract_llm_detection_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+    output_contract_llm_detection_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="30", default=30
     )
 
     def __repr__(self) -> str:

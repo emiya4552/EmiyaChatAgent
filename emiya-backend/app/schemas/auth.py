@@ -61,6 +61,10 @@ class UserResponse(BaseModel):
     default_analyze_emotion: bool = False
     # MVU 兼容总开关（详见 docs/card/0002）：off 时聊天把 MVU 卡当普通卡
     mvu_compat_enabled: bool = True
+    # 世界书导入/编辑期是否自动调用 LLM 识别可见输出契约（详见 docs/feat-adr/adr1-1）
+    output_contract_llm_detection_enabled: bool = False
+    # 每次批量识别最多送检多少条候选 entry
+    output_contract_llm_detection_limit: int = 30
     created_at: datetime
 
     class Config:
@@ -77,6 +81,16 @@ class UserUpdateRequest(BaseModel):
     )
     mvu_compat_enabled: bool | None = Field(
         None, description="MVU 兼容总开关，off 时聊天把 MVU 卡当普通卡（详见 CARD-0002）"
+    )
+    output_contract_llm_detection_enabled: bool | None = Field(
+        None,
+        description="世界书导入/编辑时是否自动调用 LLM 识别可见输出契约",
+    )
+    output_contract_llm_detection_limit: int | None = Field(
+        None,
+        ge=0,
+        le=200,
+        description="每次批量识别最多送检多少条候选世界书 entry",
     )
 
 

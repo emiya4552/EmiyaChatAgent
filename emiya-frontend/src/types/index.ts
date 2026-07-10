@@ -130,6 +130,10 @@ export interface User {
   default_analyze_emotion: boolean
   // MVU 兼容总开关：off 时聊天把 MVU 卡当普通卡（详见 docs/card/0002）
   mvu_compat_enabled: boolean
+  // 世界书导入/编辑期是否自动调用 LLM 识别可见输出契约
+  output_contract_llm_detection_enabled: boolean
+  // 每次批量识别最多送检多少条候选世界书 entry
+  output_contract_llm_detection_limit: number
   created_at: string
 }
 
@@ -139,6 +143,8 @@ export interface UserUpdateRequest {
   css_theme?: string | null
   default_analyze_emotion?: boolean
   mvu_compat_enabled?: boolean
+  output_contract_llm_detection_enabled?: boolean
+  output_contract_llm_detection_limit?: number
 }
 
 export interface UserSession {
@@ -253,6 +259,7 @@ export interface WorldbookEntry {
   role: string              // system / user / assistant
   ignore_budget: boolean
   outlet_name: string | null
+  output_contract?: Record<string, any> | null
   extras?: Record<string, any>
 }
 

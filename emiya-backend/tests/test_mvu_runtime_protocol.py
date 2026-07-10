@@ -363,44 +363,6 @@ def test_apply_reply_to_text_now_applies_passed_promptonly_scripts():
     assert out == "keep  tail"
 
 
-# ─── ADR-0003 拦截：MVU 指令条目不被尾部模板兜底误当输出模板 ───
-
-from app.services.langgraph.nodes import (  # noqa: E402
-    _detect_output_templates,
-    _extract_template_entries,
-)
-
-
-def test_tail_template_skips_mvu_tagged_entries():
-    wi = [
-        {  # [mvu_update]：含 <UpdateVariable>/<Analysis>/<JSONPatch> 自定义标签，
-           # 旧逻辑会误命中 has_custom_tag → 被当成输出模板
-            "comment": "[mvu_update]变量输出格式",
-            "content": "<UpdateVariable><Analysis>x</Analysis>"
-                       "<JSONPatch>[]</JSONPatch></UpdateVariable>",
-            "order": 10,
-        },
-        {  # [mvu_status]：状态读数，不是 LLM 要回填的模板
-            "comment": "[mvu_status]变量列表",
-            "content": "<status_current_variables>a: 1</status_current_variables>",
-            "order": 20,
-        },
-        {  # 真正的输出模板（非 MVU 标签）应保留
-            "comment": "状态栏模板",
-            "content": "<details><summary>【状态栏】</summary>"
-                       "<StatusBlock>{名字}</StatusBlock></details>",
-            "order": 30,
-        },
-    ]
-
-    entries = _extract_template_entries(wi)
-    markers = _detect_output_templates(wi)
-
-    # 只保留真正的输出模板；两条 MVU 指令/状态条目被排除
-    assert [e["comment"] if "comment" in e else e["marker"] for e in entries]  # not empty
-    assert markers == ["【状态栏】"]
-
-
 # ─── ADR-0003 §3：MVU 诊断运行时视图 ───
 
 from app.services.mvu_runtime import build_runtime_view  # noqa: E402

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.worldbook import Worldbook
+from app.services.output_contracts import annotate_entries, detect_single_entry
 from app.utils.exceptions import ForbiddenException, NotFoundException
 
 logger = logging.getLogger(__name__)
@@ -66,12 +67,19 @@ async def create_worldbook(
     case_sensitive: bool = False,
     match_whole_words: bool = False,
     extensions: dict | None = None,
+    llm_detection_enabled: bool = False,
+    llm_detection_limit: int = 30,
 ) -> Worldbook:
+    annotated_entries = await annotate_entries(
+        entries or [],
+        llm_enabled=llm_detection_enabled,
+        llm_limit=max(0, int(llm_detection_limit or 0)),
+    )
     wb = Worldbook(
         user_id=user_id,
         name=name,
         description=description,
-        entries=entries or [],
+        entries=annotated_entries,
         scan_depth=scan_depth,
         case_sensitive=case_sensitive,
         match_whole_words=match_whole_words,
@@ -96,6 +104,15 @@ async def update_worldbook(
     if wb.user_id is None:
         # 系统模板不可改
         raise ForbiddenException("系统模板世界书不可编辑")
+    if "entries" in data and data["entries"] is not None:
+        data["entries"] = await annotate_entries(
+            data["entries"],
+            llm_enabled=bool(data.pop("_llm_detection_enabled", False)),
+            llm_limit=max(0, int(data.pop("_llm_detection_limit", 30) or 0)),
+        )
+    else:
+        data.pop("_llm_detection_enabled", None)
+        data.pop("_llm_detection_limit", None)
     for k, v in data.items():
         if hasattr(wb, k) and k != "id" and k != "user_id":
             setattr(wb, k, v)
@@ -103,6 +120,32 @@ async def update_worldbook(
     await db.commit()
     await db.refresh(wb)
     return wb
+
+
+async def detect_worldbook_entry_output_contract(
+    db: AsyncSession,
+    worldbook_id: UUID,
+    user_id: UUID,
+    entry_uid: int,
+) -> Worldbook:
+    """对单条世界书 entry 主动执行 AI 输出契约识别，并保存结果。"""
+    wb = await get_worldbook(db, worldbook_id, user_id)
+    if wb is None:
+        raise NotFoundException("世界书不存在")
+    if wb.user_id is None:
+        raise ForbiddenException("系统模板世界书不可编辑")
+
+    entries = [dict(e or {}) for e in (wb.entries or [])]
+    for idx, entry in enumerate(entries):
+        if int(entry.get("uid", -1)) == int(entry_uid):
+            entries[idx] = await detect_single_entry(entry)
+            wb.entries = entries
+            db.add(wb)
+            await db.commit()
+            await db.refresh(wb)
+            return wb
+
+    raise NotFoundException("世界书条目不存在")
 
 
 async def delete_worldbook(

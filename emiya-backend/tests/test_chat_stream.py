@@ -92,6 +92,154 @@ async def test_no_duplicate_message_done(
     assert len(done_events) == 1, f"message_done 应只 emit 一次，实际 {len(done_events)} 次"
 
 
+async def test_message_done_carries_output_contract_diagnostics(
+    client, auth_headers, test_conversation, mock_deepseek_normal, monkeypatch,
+):
+    """尾部模板被续写后，message_done 应下发可见输出契约诊断。"""
+    from app.models.conversation import Conversation
+    from app.models.worldbook import Worldbook
+    from app.services.output_contracts import detect_entry_heuristic
+
+    async def _emit_narrative(*args, **kwargs):
+        yield "正文"
+
+    async def _emit_tail(*args, **kwargs):
+        yield "姓名：伶伶"
+
+    monkeypatch.setattr(
+        "app.services.chat_service.call_deepseek_stream",
+        _emit_narrative,
+    )
+    monkeypatch.setattr(
+        "app.services.output_contracts.tail.call_deepseek_stream_prefix",
+        _emit_tail,
+    )
+
+    async with AsyncSessionLocal() as session:
+        entry = {
+            "uid": 1,
+            "comment": "状态栏",
+            "content": (
+                "# 此为'状态栏'，只允许输出在最底部。\n"
+                "<details>\n"
+                "<summary><b>【状态栏】</b></summary>\n"
+                "<StatusBlock>\n"
+                "姓名:{{char name}}\n"
+                "</StatusBlock>\n"
+                "</details>"
+            ),
+            "enabled": True,
+            "constant": True,
+            "selective": False,
+            "position": 0,
+            "order": 0,
+            "role": "system",
+        }
+        entry["output_contract"] = detect_entry_heuristic(entry)
+        worldbook = Worldbook(
+            id=uuid.uuid4(),
+            user_id=test_conversation.user_id,
+            name="可见格式测试世界书",
+            entries=[entry],
+        )
+        conv = await session.get(Conversation, test_conversation.id)
+        conv.worldbook_ids = [str(worldbook.id)]
+        session.add(worldbook)
+        await session.commit()
+
+    response = await client.post(
+        f"/api/v1/conversations/{test_conversation.id}/chat",
+        json={"content": "你好", "reply_length": "short"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+
+    events = _parse_sse(response.text)
+    done_events = [e for e in events if e["event"] == "message_done"]
+    assert len(done_events) == 1
+
+    done = done_events[0]["data"]
+    output_contract = done["output_contract"]
+    assert output_contract["mode"] == "append_tail"
+    assert output_contract["ok"] is True
+    assert output_contract["required"] == 1
+    assert output_contract["missing"] == []
+    assert output_contract["repaired"] is True
+    assert output_contract["repair_mode"] == "continuation"
+    assert "【状态栏】" in done["final_content"]
+    assert "姓名：伶伶" in done["final_content"]
+
+
+async def test_message_done_reports_output_contract_missing_when_repair_fails(
+    client, auth_headers, test_conversation, mock_deepseek_normal, monkeypatch,
+):
+    """尾部模板续写失败时，message_done 应保留缺失诊断。"""
+    from app.models.conversation import Conversation
+    from app.models.worldbook import Worldbook
+    from app.services.output_contracts import detect_entry_heuristic
+
+    async def _emit_narrative(*args, **kwargs):
+        yield "正文"
+
+    async def _fail_tail(*args, **kwargs):
+        raise RuntimeError("simulated tail failure")
+        yield ""  # pragma: no cover
+
+    monkeypatch.setattr(
+        "app.services.chat_service.call_deepseek_stream",
+        _emit_narrative,
+    )
+    monkeypatch.setattr(
+        "app.services.output_contracts.tail.call_deepseek_stream_prefix",
+        _fail_tail,
+    )
+
+    async with AsyncSessionLocal() as session:
+        entry = {
+            "uid": 1,
+            "comment": "状态栏",
+            "content": (
+                "<details>\n"
+                "<summary><b>【状态栏】</b></summary>\n"
+                "<StatusBlock>姓名:{{char name}}</StatusBlock>\n"
+                "</details>"
+            ),
+            "enabled": True,
+            "constant": True,
+            "selective": False,
+            "position": 0,
+            "order": 0,
+            "role": "system",
+        }
+        entry["output_contract"] = detect_entry_heuristic(entry)
+        worldbook = Worldbook(
+            id=uuid.uuid4(),
+            user_id=test_conversation.user_id,
+            name="可见格式失败测试世界书",
+            entries=[entry],
+        )
+        conv = await session.get(Conversation, test_conversation.id)
+        conv.worldbook_ids = [str(worldbook.id)]
+        session.add(worldbook)
+        await session.commit()
+
+    response = await client.post(
+        f"/api/v1/conversations/{test_conversation.id}/chat",
+        json={"content": "你好", "reply_length": "short"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+
+    events = _parse_sse(response.text)
+    done = [e for e in events if e["event"] == "message_done"][0]["data"]
+    output_contract = done["output_contract"]
+    assert output_contract["mode"] == "append_tail"
+    assert output_contract["ok"] is False
+    assert output_contract["required"] == 1
+    assert output_contract["repaired"] is False
+    assert output_contract["missing"][0]["reason"] == "unclosed_details"
+
+
 # ─── B5: 中断路径 error 带 partial_message_id ─────────────────────
 
 

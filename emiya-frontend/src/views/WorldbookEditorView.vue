@@ -45,7 +45,12 @@
 
         <!-- 右：条目编辑 -->
         <div class="entry-pane">
-          <WorldbookEntryEditor :entry="selectedEntry" :book-defaults="bookDefaults" />
+          <WorldbookEntryEditor
+            :entry="selectedEntry"
+            :book-defaults="bookDefaults"
+            :detecting-output-contract="detectingOutputContract"
+            @detect-output-contract="detectSelectedEntryOutputContract"
+          />
         </div>
       </div>
     </n-spin>
@@ -78,7 +83,11 @@ import {
 import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
 import WorldbookEntryEditor from '../components/worldbook/WorldbookEntryEditor.vue'
-import { fetchWorldbook, updateWorldbook } from '../api/worldbook'
+import {
+  detectWorldbookEntryOutputContract,
+  fetchWorldbook,
+  updateWorldbook,
+} from '../api/worldbook'
 import type { Worldbook, WorldbookEntry } from '../types'
 
 const route = useRoute()
@@ -88,6 +97,7 @@ const id = route.params.id as string
 
 const loading = ref(true)
 const saving = ref(false)
+const detectingOutputContract = ref(false)
 const metaDialog = ref(false)
 const selectedIdx = ref<number>(-1)
 const book = ref<Worldbook>({
@@ -152,6 +162,7 @@ function addEntry() {
     role: 'system',
     ignore_budget: false,
     outlet_name: null,
+    output_contract: null,
     extras: {},
   }
   book.value.entries.push(newEntry)
@@ -186,6 +197,36 @@ async function handleSave() {
     message.error(err.response?.data?.detail || '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+async function saveBookSilently(): Promise<void> {
+  const updated = await updateWorldbook(id, {
+    name: book.value.name,
+    description: book.value.description,
+    scan_depth: book.value.scan_depth,
+    case_sensitive: book.value.case_sensitive,
+    match_whole_words: book.value.match_whole_words,
+    entries: book.value.entries,
+  })
+  book.value = updated
+}
+
+async function detectSelectedEntryOutputContract() {
+  const entry = selectedEntry.value
+  if (!entry) return
+  detectingOutputContract.value = true
+  try {
+    await saveBookSilently()
+    const updated = await detectWorldbookEntryOutputContract(id, entry.uid)
+    book.value = updated
+    const idx = book.value.entries.findIndex(e => e.uid === entry.uid)
+    if (idx >= 0) selectedIdx.value = idx
+    message.success('AI 输出格式识别已完成')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '识别失败')
+  } finally {
+    detectingOutputContract.value = false
   }
 }
 </script>

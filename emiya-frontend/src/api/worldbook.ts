@@ -28,6 +28,14 @@ export async function updateWorldbook(id: string, body: WorldbookUpdateRequest):
   return res.data
 }
 
+export async function detectWorldbookEntryOutputContract(
+  id: string,
+  entryUid: number,
+): Promise<Worldbook> {
+  const res = await api.post(`/v1/worldbooks/${id}/entries/${entryUid}/detect-output-contract`)
+  return res.data
+}
+
 export async function deleteWorldbook(id: string): Promise<void> {
   await api.delete(`/v1/worldbooks/${id}`)
 }

@@ -17,6 +17,7 @@ KNOWN_ENTRY_FIELDS = {
     "scan_depth", "case_sensitive", "match_whole_words",
     "position", "depth", "order", "role",
     "ignore_budget", "outlet_name",
+    "output_contract",
     "extras",
 }
 
@@ -90,6 +91,8 @@ def from_st_entry(st_entry: dict) -> dict:
         "ignore_budget": bool(st_entry.get("ignoreBudget", False)),
         "outlet_name": st_entry.get("outletName") or None,
     }
+    if isinstance(st_entry.get("output_contract"), dict):
+        out["output_contract"] = st_entry["output_contract"]
 
     # extras：保留所有未识别字段（ST 高级语义如 sticky/cooldown/probability 等）
     consumed_st_keys = {
@@ -97,6 +100,7 @@ def from_st_entry(st_entry: dict) -> dict:
         "key", "keysecondary",
         "selectiveLogic", "scanDepth", "caseSensitive", "matchWholeWords",
         "position", "depth", "order", "role", "ignoreBudget", "outletName",
+        "output_contract",
     }
     extras = {k: v for k, v in st_entry.items() if k not in consumed_st_keys}
     if extras:
@@ -130,6 +134,8 @@ def to_st_entry(entry: dict) -> dict:
         "vectorized": False,
         "addMemo": bool(entry.get("comment")),
     }
+    if isinstance(entry.get("output_contract"), dict):
+        out["output_contract"] = entry["output_contract"]
     # extras 原样还原
     extras = entry.get("extras") or {}
     for k, v in extras.items():

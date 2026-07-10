@@ -30,6 +30,8 @@ describe('MessageBubble', () => {
       css_theme: null,
       default_analyze_emotion: false,
       mvu_compat_enabled: true,
+      output_contract_llm_detection_enabled: false,
+      output_contract_llm_detection_limit: 30,
       created_at: '2026-01-01T00:00:00Z',
     }
 

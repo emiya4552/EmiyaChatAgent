@@ -45,6 +45,9 @@ class WorldbookEntry(BaseModel):
     # outlet
     outlet_name: str | None = None
 
+    # 可见输出契约识别结果（详见 docs/feat-adr/adr1-1）
+    output_contract: dict | None = None
+
     # 兜底字段
     extras: dict = Field(default_factory=dict, description="ST 未支持字段原样保留")
 
