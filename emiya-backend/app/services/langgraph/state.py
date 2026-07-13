@@ -66,6 +66,10 @@ class ChatState(TypedDict):
     # MVU 兼容总开关（账户级，chat_service 从 User 载入；CARD-0002）
     # off 时 node_build_prompt 剔除 MVU 标签条目 + 跳过 EJS，并把 persona_uses_mvu 压成 False
     mvu_compat_enabled: bool
+    # 可见输出契约聊天期执行配置（ADR-1f）：{account_defaults, overrides}。
+    # chat_service 从 User + conversation.chat_config 载入，node_post_process 用它
+    # 连同已编译契约 resolve_policy 出 executor 的运行策略。
+    output_contract_config: dict | None
     # MVU 变量作用域 — dual-bucket {"local","global","names"}（详见 docs/adr/0007）
     # 由 node_build_prompt 加载/产出，node_post_process 成功时写回 DB（幂等）
     mvu_scope: dict

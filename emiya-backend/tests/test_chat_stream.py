@@ -159,13 +159,13 @@ async def test_message_done_carries_output_contract_diagnostics(
     assert len(done_events) == 1
 
     done = done_events[0]["data"]
+    # ADR-1f 稳定诊断结构：outcome/coverage/method + initial/final 两侧。
     output_contract = done["output_contract"]
-    assert output_contract["mode"] == "append_tail"
-    assert output_contract["ok"] is True
-    assert output_contract["required"] == 1
-    assert output_contract["missing"] == []
-    assert output_contract["repaired"] is True
-    assert output_contract["repair_mode"] == "continuation"
+    assert output_contract["contract_mode"] == "append_tail"
+    assert output_contract["outcome"] == "passed"
+    assert output_contract["final"]["ok"] is True
+    assert output_contract["method"] == "reconstructed"
+    assert output_contract["initial"]["ok"] is False  # 续写前缺状态栏
     assert "【状态栏】" in done["final_content"]
     assert "姓名：伶伶" in done["final_content"]
 
@@ -233,11 +233,11 @@ async def test_message_done_reports_output_contract_missing_when_repair_fails(
     events = _parse_sse(response.text)
     done = [e for e in events if e["event"] == "message_done"][0]["data"]
     output_contract = done["output_contract"]
-    assert output_contract["mode"] == "append_tail"
-    assert output_contract["ok"] is False
-    assert output_contract["required"] == 1
-    assert output_contract["repaired"] is False
-    assert output_contract["missing"][0]["reason"] == "unclosed_details"
+    assert output_contract["contract_mode"] == "append_tail"
+    assert output_contract["outcome"] == "failed"
+    assert output_contract["final"]["ok"] is False
+    issues = output_contract["final"]["issues"]
+    assert any(i.get("reason") == "unclosed_details" for i in issues)
 
 
 # ─── B5: 中断路径 error 带 partial_message_id ─────────────────────

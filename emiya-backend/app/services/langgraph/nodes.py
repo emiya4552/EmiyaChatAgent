@@ -777,6 +777,7 @@ async def node_build_prompt(state: ChatState) -> dict:
         # 这里仅消费契约模块产出的提示文本。
         if settings.WORLDBOOK_TAIL_TEMPLATE_ENFORCEMENT and wi_activated:
             from app.services.output_contracts import (
+                build_output_contract_prompt,
                 build_tail_template_directive,
                 build_visible_output_contract,
             )
@@ -798,6 +799,16 @@ async def node_build_prompt(state: ChatState) -> dict:
                     "[尾部模板兜底] 注入约束：%s",
                     [block.marker for block in tail_blocks],
                 )
+
+            # ADR-1e §2 生成前锚定：full_document 契约注入整篇结构约束。
+            if output_contract.required_sections:
+                fd_directive = build_output_contract_prompt(output_contract)
+                if fd_directive:
+                    rendered.append({"role": "system", "content": fd_directive})
+                    logger.info(
+                        "[整篇结构锚定] 注入 full_document 约束：%d sections",
+                        len(output_contract.required_sections),
+                    )
 
         # 主回复只写可见叙事；变量更新由回复后的独立更新通道处理。
         if mvu_policy.divert_update_entries:
@@ -988,6 +999,72 @@ async def node_post_process(state: ChatState) -> dict:
                 state["mvu_scope"] = scope_after
             if update_diag["applied"] or update_diag["dropped"]:
                 update_channel = "text"
+
+        # ── ADR-1e 阶段5：可见输出契约执行（full_document 确定性修复）──
+        # 必须在双视图（回复正则）之后、落库之前，让修复结果进入 content / display。
+        # 只处理 full_document（有 required_sections）；append_tail 仍由 chat_service
+        # 流式 continuation 处理。确定性修复不改语义内容，故 MVU ops 不受影响。
+        output_contract_diag = None
+        if processed_reply:
+            try:
+                from app.services.output_contracts import (
+                    build_contract_sse,
+                    compile_contract,
+                    enforce_visible_output_contract,
+                    resolve_policy,
+                )
+
+                _oc = compile_contract(state.get("wi_activated"))
+                if _oc.required_sections:
+                    _oc_cfg = state.get("output_contract_config") or {}
+                    _oc_policy = resolve_policy(
+                        _oc,
+                        account_defaults=_oc_cfg.get("account_defaults"),
+                        conversation_overrides=_oc_cfg.get("overrides"),
+                    )
+                    _oc_result = await enforce_visible_output_contract(
+                        content=processed_reply,
+                        display_content=display_reply,
+                        contract=_oc,
+                        messages=state.get("messages"),
+                        policy=_oc_policy,
+                    )
+                    processed_reply = _oc_result.content
+                    display_reply = _oc_result.display_content
+                    state["assistant_reply"] = processed_reply
+                    state["assistant_display"] = display_reply
+                    _oc_diag = _oc_result.diagnostics
+                    output_contract_diag = build_contract_sse(
+                        contract=_oc,
+                        contract_mode="full_document",
+                        requested_mode=_oc_result.requested_mode,
+                        effective_mode=_oc_result.effective_mode,
+                        outcome=_oc_result.outcome,
+                        coverage=_oc_result.coverage,
+                        method=_oc_result.method,
+                        initial=None,
+                        final=None,
+                        actions=_oc_result.actions,
+                        latency_ms=_oc_result.latency_ms,
+                        extra_calls=_oc_result.extra_calls,
+                    )
+                    # executor 已把 initial/final 压成 {ok, issues}，直接透传其结构。
+                    output_contract_diag["initial"] = _oc_diag.get(
+                        "initial", {"ok": True, "issues": []}
+                    )
+                    output_contract_diag["final"] = _oc_diag.get(
+                        "final", {"ok": _oc_result.outcome == "passed", "issues": []}
+                    )
+                    logger.info(
+                        "[输出契约] full_document outcome=%s coverage=%s method=%s actions=%d",
+                        _oc_result.outcome,
+                        _oc_result.coverage,
+                        _oc_result.method,
+                        len(_oc_result.actions),
+                    )
+            except Exception:
+                logger.exception("[输出契约] full_document 执行失败，保留原回复")
+        state["output_contract_diag"] = output_contract_diag
 
         # 浏览器运行时接管 MVU 时，后端只保留 ops 与诊断，不直接修改 stat_data。
         _retire_apply = _should_retire_backend_apply(state)
@@ -1343,6 +1420,7 @@ async def node_post_process(state: ChatState) -> dict:
             "emotion_intensity": state.get("emotion_intensity"),
             "emotion_confidence": state.get("emotion_confidence"),
             "emotion_triggers": state.get("emotion_triggers"),
+            "output_contract": state.get("output_contract_diag"),
         }
 
 

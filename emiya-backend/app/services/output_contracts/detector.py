@@ -78,11 +78,15 @@ def _base_contract(
     entry: dict,
     abstract: dict[str, Any] | None,
     reason: str = "",
+    trigger: str = "auto_import",
 ) -> dict[str, Any]:
     return {
         "type": ctype,
         "status": status,
         "source": source,
+        # trigger 区分识别触发来源：auto_import（导入/编辑期自动）/ manual（用户主动）/
+        # edit（内容改动重扫）。用于 ADR-1e 主契约权威性优先级，与识别手段 source 正交。
+        "trigger": trigger,
         "confidence": float(confidence),
         "content_hash": content_hash(str(entry.get("content") or "")),
         "detector_version": DETECTOR_VERSION,
@@ -92,7 +96,9 @@ def _base_contract(
     }
 
 
-def _none_contract(entry: dict, *, source: str = "heuristic") -> dict[str, Any]:
+def _none_contract(
+    entry: dict, *, source: str = "heuristic", trigger: str = "auto_import"
+) -> dict[str, Any]:
     return _base_contract(
         ctype="none",
         status="none",
@@ -101,10 +107,13 @@ def _none_contract(entry: dict, *, source: str = "heuristic") -> dict[str, Any]:
         entry=entry,
         abstract=None,
         reason="未发现输出格式模板特征",
+        trigger=trigger,
     )
 
 
-def _unknown_contract(entry: dict, reason: str) -> dict[str, Any]:
+def _unknown_contract(
+    entry: dict, reason: str, *, trigger: str = "auto_import"
+) -> dict[str, Any]:
     return _base_contract(
         ctype="unknown",
         status="unknown",
@@ -113,6 +122,7 @@ def _unknown_contract(entry: dict, reason: str) -> dict[str, Any]:
         entry=entry,
         abstract=None,
         reason=reason[:80],
+        trigger=trigger,
     )
 
 
@@ -305,7 +315,9 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     return {}
 
 
-def _normalise_llm_contract(entry: dict, data: dict[str, Any]) -> dict[str, Any]:
+def _normalise_llm_contract(
+    entry: dict, data: dict[str, Any], *, trigger: str = "auto_import"
+) -> dict[str, Any]:
     ctype = str(data.get("type") or data.get("template_type") or "unknown")
     if ctype not in CONTRACT_TYPES:
         ctype = "unknown"
@@ -326,15 +338,16 @@ def _normalise_llm_contract(entry: dict, data: dict[str, Any]) -> dict[str, Any]
         entry=entry,
         abstract=abstract,
         reason=reason,
+        trigger=trigger,
     )
 
 
-async def detect_entry_llm(entry: dict) -> dict[str, Any]:
+async def detect_entry_llm(entry: dict, *, trigger: str = "auto_import") -> dict[str, Any]:
     """调用 LLM 识别单条 entry 的输出契约。失败时返回 unknown。"""
     content = str(entry.get("content") or "")
     comment = str(entry.get("comment") or "")
     if not content.strip():
-        return _none_contract(entry, source="llm")
+        return _none_contract(entry, source="llm", trigger=trigger)
 
     prompt = f"""你是一个世界书输出格式模板分析器。请判断下面 entry 是否要求 assistant 按固定用户可见格式输出。
 
@@ -383,11 +396,11 @@ entry content:
         )
         data = _extract_json_object(response)
         if not data:
-            return _unknown_contract(entry, "LLM 返回非 JSON")
-        return _normalise_llm_contract(entry, data)
+            return _unknown_contract(entry, "LLM 返回非 JSON", trigger=trigger)
+        return _normalise_llm_contract(entry, data, trigger=trigger)
     except Exception as exc:
         logger.warning("[输出契约识别] LLM 识别失败 uid=%s: %s", entry.get("uid"), exc)
-        return _unknown_contract(entry, f"LLM 失败: {exc}")
+        return _unknown_contract(entry, f"LLM 失败: {exc}", trigger=trigger)
 
 
 def _existing_contract_fresh(entry: dict) -> bool:
@@ -430,5 +443,5 @@ async def annotate_entries(
 async def detect_single_entry(entry: dict) -> dict:
     """用户主动触发单条 entry AI 识别。"""
     updated = dict(entry or {})
-    updated["output_contract"] = await detect_entry_llm(updated)
+    updated["output_contract"] = await detect_entry_llm(updated, trigger="manual")
     return updated

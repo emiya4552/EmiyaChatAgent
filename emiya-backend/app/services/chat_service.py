@@ -20,9 +20,12 @@ from app.services.langgraph.nodes import (
 from app.services.langgraph.state import ChatState
 from app.services.llm_service import call_deepseek_stream
 from app.services.output_contracts import (
+    build_contract_sse,
     build_visible_output_contract,
+    compile_contract,
     continue_missing_tail_blocks,
-    diagnostics_to_dict,
+    resolve_policy,
+    strict_available,
     validate_visible_output,
 )
 from app.services.prompt_renderer import DEFAULT_TEMPLATE_BLOCKS
@@ -100,6 +103,32 @@ async def process_chat(
     _user_row = await db.get(User, user_id)
     mvu_compat_enabled = bool(_user_row.mvu_compat_enabled) if _user_row else True
 
+    # 2.7 可见输出契约聊天期执行配置（ADR-1f）：账户默认 + 对话 chat_config 覆盖。
+    # node_post_process 用它 resolve_policy 出 executor 运行策略。
+    _conv_cfg = conversation.chat_config or {}
+    output_contract_config = {
+        "account_defaults": {
+            "output_contract_default_mode": (
+                _user_row.output_contract_default_mode if _user_row else "auto"
+            ),
+            "output_contract_allow_full_rewrite": (
+                _user_row.output_contract_allow_full_rewrite if _user_row else False
+            ),
+            "output_contract_strict_fallback": (
+                _user_row.output_contract_strict_fallback if _user_row else "repair"
+            ),
+        },
+        "overrides": {
+            "output_contract_mode": _conv_cfg.get("output_contract_mode"),
+            "output_contract_allow_full_rewrite": _conv_cfg.get(
+                "output_contract_allow_full_rewrite"
+            ),
+            "output_contract_strict_fallback": _conv_cfg.get(
+                "output_contract_strict_fallback"
+            ),
+        },
+    }
+
     # 3. 构建初始 state
     graph = build_analysis_graph()
     initial_state: ChatState = {
@@ -143,6 +172,7 @@ async def process_chat(
         "mvu_double_ai_ops": [],
         "enabled_blocks": enabled_blocks,
         "mvu_compat_enabled": mvu_compat_enabled,
+        "output_contract_config": output_contract_config,
         "token_budget_report": None,
     }
 
@@ -211,6 +241,26 @@ async def process_chat(
     buffer: list[str] = []
     chat_config = conversation.chat_config or {}
 
+    # ADR-1g：strict 模式在生成前判定。可用时草稿不作为 message_delta 流式下发（改发
+    # contract_stage 阶段事件），最终由 node_post_process 的确定性渲染经 message_done 一次
+    # 性提交。strict 永不自动开启——只有账户/对话显式设为 strict 且启用前提满足才为真。
+    _strict_contract = compile_contract(final_state.get("wi_activated"))
+    strict_active = False
+    if _strict_contract.required_sections:
+        _strict_policy = resolve_policy(
+            _strict_contract,
+            account_defaults=output_contract_config["account_defaults"],
+            conversation_overrides=output_contract_config["overrides"],
+        )
+        strict_active = (
+            _strict_policy["mode"] == "strict"
+            and strict_available(_strict_contract, _strict_policy)[0]
+        )
+    if strict_active:
+        _stage_evt = {"stage": "drafting"}
+        yield f"event: contract_stage\ndata: {json.dumps(_stage_evt, ensure_ascii=False)}\n\n"
+        await _broadcast(conversation_id, "contract_stage", _stage_evt)
+
     # max_tokens：预设 openai_max_tokens 优先，否则按 reply_length 映射
     dynamic_max_tokens = resolve_reply_max_tokens(
         chat_config,
@@ -263,8 +313,10 @@ async def process_chat(
             presence_penalty=llm_presence_penalty,
         ):
             buffer.append(token)
-            yield f"event: message_delta\ndata: {json.dumps({'content': token}, ensure_ascii=False)}\n\n"
-            await _broadcast(conversation_id, "message_delta", {"content": token})
+            # strict：草稿不流式暴露；前端只看阶段状态，最终一次性替换（ADR-1g）。
+            if not strict_active:
+                yield f"event: message_delta\ndata: {json.dumps({'content': token}, ensure_ascii=False)}\n\n"
+                await _broadcast(conversation_id, "message_delta", {"content": token})
 
     except Exception as e:
         logger.error(f"流式生成中断: {e}")
@@ -319,9 +371,23 @@ async def process_chat(
         final_state["assistant_reply"],
         output_contract,
     )
+    # 保留初次校验，供 message_done 的稳定诊断结构（ADR-1f）区分 initial / final。
+    tail_initial_diag = output_contract_diag
+    tail_method = "initial"
+    tail_extra_calls = 0
+
+    # ADR-1f：tail 契约的执行模式（auto → repair）。off 时连尾部续写也不做。
+    _tail_policy = resolve_policy(
+        output_contract,
+        account_defaults=output_contract_config["account_defaults"],
+        conversation_overrides=output_contract_config["overrides"],
+    )
+    tail_execution_on = _tail_policy["mode"] != "off"
 
     tail_repair_needed = bool(
-        output_contract.required_tail_blocks and output_contract_diag.missing
+        output_contract.required_tail_blocks
+        and output_contract_diag.missing
+        and tail_execution_on
     )
 
     logger.info(
@@ -339,6 +405,7 @@ async def process_chat(
         buffer
         and output_contract.required_tail_blocks
         and settings.WORLDBOOK_TAIL_CONTINUATION_ENABLED
+        and tail_execution_on
     ):
         async for delta in continue_missing_tail_blocks(
             reply=final_state["assistant_reply"],
@@ -354,14 +421,18 @@ async def process_chat(
             final_state["assistant_reply"],
             output_contract,
         )
+        tail_extra_calls = 1
         if tail_repair_needed and repaired_diag.ok:
             output_contract_diag = replace(
                 repaired_diag,
                 repaired=True,
                 repair_mode="continuation",
             )
+            tail_method = "reconstructed"
         else:
             output_contract_diag = repaired_diag
+            if repaired_diag != tail_initial_diag:
+                tail_method = "reconstructed"
 
     # 6. 保存回复 + 后处理（情绪记录、关系更新、记忆提取）
     if final_state.get("persona_uses_mvu") and (final_state.get("assistant_reply") or "").strip():
@@ -403,12 +474,23 @@ async def process_chat(
     # **之前**抓，base_stat 才是 S(N-1)。off 时返回 None，完全不产生该字段。
     mvu_browser_sync = _build_mvu_browser_sync(final_state)
 
+    # ADR-1g：strict 的结构化槽位 pass + 确定性渲染在 node_post_process 内执行。
+    if strict_active:
+        _stage_evt = {"stage": "structuring"}
+        yield f"event: contract_stage\ndata: {json.dumps(_stage_evt, ensure_ascii=False)}\n\n"
+        await _broadcast(conversation_id, "contract_stage", _stage_evt)
+
     post_result: dict = {}
     try:
         post_result = await node_post_process(final_state)
         logger.debug(f"node_post_process 成功, new_memories={post_result.get('new_memories_count', 0)}")
     except Exception:
         logger.exception("post_process 失败，回复已生成但状态未更新")
+
+    if strict_active:
+        _stage_evt = {"stage": "done"}
+        yield f"event: contract_stage\ndata: {json.dumps(_stage_evt, ensure_ascii=False)}\n\n"
+        await _broadcast(conversation_id, "contract_stage", _stage_evt)
 
     # 7. 推送好感度变动（如有）
     affinity_delta = post_result.get("affinity_delta", 0)
@@ -457,8 +539,23 @@ async def process_chat(
     # ADR-0008c 阶段1：附加 down-channel（仅 MVU_BROWSER_RUNTIME on 时存在）
     if final_state.get("token_budget_report"):
         msg_done_data["token_budget"] = final_state["token_budget_report"]
+    # ADR-1f 稳定诊断结构：tail 契约在此按 initial/final 组装；full_document 由
+    # node_post_process 在双视图之后执行并产出诊断，覆盖此处对 raw reply 的诊断。
     if output_contract.active:
-        msg_done_data["output_contract"] = diagnostics_to_dict(output_contract_diag)
+        msg_done_data["output_contract"] = build_contract_sse(
+            contract=output_contract,
+            contract_mode=output_contract.mode,
+            requested_mode=_tail_policy["requested_mode"],
+            effective_mode=_tail_policy["mode"],
+            outcome="passed" if output_contract_diag.ok else "failed",
+            coverage="full" if output_contract.required_tail_blocks else "none",
+            method=tail_method,
+            initial=tail_initial_diag,
+            final=output_contract_diag,
+            extra_calls=tail_extra_calls,
+        )
+    if post_result.get("output_contract"):
+        msg_done_data["output_contract"] = post_result["output_contract"]
     if mvu_browser_sync is not None:
         msg_done_data["mvu_browser_sync"] = mvu_browser_sync
     yield f"event: message_done\ndata: {json.dumps(msg_done_data, ensure_ascii=False)}\n\n"

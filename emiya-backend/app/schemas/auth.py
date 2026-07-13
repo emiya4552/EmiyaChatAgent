@@ -65,6 +65,10 @@ class UserResponse(BaseModel):
     output_contract_llm_detection_enabled: bool = False
     # 每次批量识别最多送检多少条候选 entry
     output_contract_llm_detection_limit: int = 30
+    # 聊天期可见输出契约执行默认（详见 docs/feat-adr/adr1f）
+    output_contract_default_mode: str = "auto"
+    output_contract_allow_full_rewrite: bool = False
+    output_contract_strict_fallback: str = "repair"
     created_at: datetime
 
     class Config:
@@ -91,6 +95,20 @@ class UserUpdateRequest(BaseModel):
         ge=0,
         le=200,
         description="每次批量识别最多送检多少条候选世界书 entry",
+    )
+    output_contract_default_mode: str | None = Field(
+        None,
+        pattern="^(off|auto|guide|repair|strict)$",
+        description="聊天期可见输出契约默认执行模式（详见 ADR-1f）",
+    )
+    output_contract_allow_full_rewrite: bool | None = Field(
+        None,
+        description="是否允许最后兜底的整篇 rewrite（独立许可，默认关）",
+    )
+    output_contract_strict_fallback: str | None = Field(
+        None,
+        pattern="^(repair|guide|off)$",
+        description="strict 不可用时的降级模式",
     )
 
 

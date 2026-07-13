@@ -134,6 +134,10 @@ export interface User {
   output_contract_llm_detection_enabled: boolean
   // 每次批量识别最多送检多少条候选世界书 entry
   output_contract_llm_detection_limit: number
+  // 聊天期可见输出契约执行默认（ADR-1f）
+  output_contract_default_mode: string
+  output_contract_allow_full_rewrite: boolean
+  output_contract_strict_fallback: string
   created_at: string
 }
 
@@ -145,6 +149,9 @@ export interface UserUpdateRequest {
   mvu_compat_enabled?: boolean
   output_contract_llm_detection_enabled?: boolean
   output_contract_llm_detection_limit?: number
+  output_contract_default_mode?: string
+  output_contract_allow_full_rewrite?: boolean
+  output_contract_strict_fallback?: string
 }
 
 export interface UserSession {
@@ -178,6 +185,10 @@ export interface ChatConfig {
   worldbook_budget_pct?: number
   worldbook_budget_cap?: number
   worldbook_overflow_alert?: boolean
+  // 可见输出契约聊天期执行覆盖（ADR-1f）；null/缺省 = 继承账户默认
+  output_contract_mode?: string | null
+  output_contract_allow_full_rewrite?: boolean | null
+  output_contract_strict_fallback?: string | null
 }
 
 export interface TokenBudgetReport {
@@ -413,6 +424,33 @@ export interface Message {
   // 显示版（ADR-0003 双管线）：markdownOnly 美化后的文本。为空/缺省时回退 content
   display_content?: string | null
   created_at: string
+  // 可见输出契约本轮诊断（ADR-1e/1f）：随 message_done 到达，仅 assistant 消息可能有
+  output_contract?: OutputContractDiag | null
+}
+
+// 可见输出契约本轮诊断稳定结构（ADR-1f）。三维分开：outcome=可检查规则是否满足、
+// coverage=程序保证覆盖率、method=达成手段。initial/final 是两侧校验；guaranteed_rules
+// 为程序保证的硬结构，soft_rules 只受 Prompt 引导。取代旧扁平结构（ADR-1c）。
+export interface OutputContractSide {
+  ok: boolean
+  issues: Array<Record<string, unknown>>
+}
+export interface OutputContractDiag {
+  contract_mode: string
+  requested_mode?: string
+  effective_mode?: string
+  outcome: string // passed | failed | conflict | disabled
+  coverage?: string // full | partial | none
+  method?: string // initial | reconstructed | slot_completed | rewritten | strict_rendered | fallback
+  initial?: OutputContractSide
+  final?: OutputContractSide
+  actions?: Array<Record<string, unknown>>
+  guaranteed_rules?: string[]
+  soft_rules?: string[]
+  conflicts?: Array<Record<string, unknown>>
+  latency_ms?: number
+  extra_calls?: number
+  token_usage?: number
 }
 
 // MVU 诊断运行时视图（ADR-0003 §3）：只读诊断，随 message_done 派生，不持久化

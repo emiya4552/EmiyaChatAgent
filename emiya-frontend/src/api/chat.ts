@@ -16,13 +16,15 @@ export function sendMessage(
   replyLength: string,
   callbacks: {
     onToken: (token: string) => void
-    onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number; variables?: Record<string, unknown>; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; token_budget?: TokenBudgetReport; emotion?: string; emotion_intensity?: number }) => void
+    onDone: (data: { message_id: string; conversation_id: string; new_memories?: number; affinity_score?: number; variables?: Record<string, unknown>; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; token_budget?: TokenBudgetReport; emotion?: string; emotion_intensity?: number; output_contract?: import('../types').OutputContractDiag }) => void
     onError: (error: string, partialMessageId?: string) => void
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
     onRelationshipChange?: (data: { level: number; level_name: string; affinity_score: number }) => void
     onMilestone?: (data: { key: string; name: string }) => void
     onAffinityUpdate?: (data: { delta: number; reason: string; score: number }) => void
     onWorldInfoActivated?: (data: WorldInfoActivated) => void
+    // ADR-1g strict：草稿不流式，只推阶段状态（drafting/structuring/…/done）
+    onContractStage?: (stage: string) => void
   }
 ): AbortController {
   const controller = new AbortController()
@@ -86,6 +88,8 @@ export function sendMessage(
               callbacks.onAffinityUpdate?.(data)
             } else if (event === 'worldinfo_activated') {
               callbacks.onWorldInfoActivated?.(data as WorldInfoActivated)
+            } else if (event === 'contract_stage') {
+              callbacks.onContractStage?.(data.stage)
             }
           } catch {
             // 解析失败，跳过
@@ -108,8 +112,9 @@ export function watchLive(
   signal: AbortSignal,
   callbacks: {
     onToken: (token: string) => void
-    onDone: (data: { message_id: string; conversation_id: string; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; token_budget?: TokenBudgetReport; emotion?: string; emotion_intensity?: number }) => void
+    onDone: (data: { message_id: string; conversation_id: string; final_content?: string; final_display_content?: string; mvu_runtime_view?: unknown; mvu_browser_sync?: MvuBrowserSync; token_budget?: TokenBudgetReport; emotion?: string; emotion_intensity?: number; output_contract?: import('../types').OutputContractDiag }) => void
     onMemoryRecall?: (memories: Array<{ content: string; relevance: number }>) => void
+    onContractStage?: (stage: string) => void
     onError: () => void
   }
 ) {
@@ -156,6 +161,8 @@ export function watchLive(
               callbacks.onDone(data)
             } else if (event === 'memory_recall') {
               callbacks.onMemoryRecall?.(data.memories)
+            } else if (event === 'contract_stage') {
+              callbacks.onContractStage?.(data.stage)
             } else if (event === 'error') {
               callbacks.onError()
             }

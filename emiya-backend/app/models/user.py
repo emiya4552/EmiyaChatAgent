@@ -61,5 +61,20 @@ class User(Base, TimestampMixin):
         Integer, nullable=False, server_default="30", default=30
     )
 
+    # === 可见输出契约聊天期执行默认（详见 docs/feat-adr/adr1f） ===
+    # 账户默认执行模式，新对话继承；对话 chat_config 可覆盖。默认 auto：
+    # tail→repair、full_document→guide、strict 永不自动开启。
+    output_contract_default_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="auto", default="auto"
+    )
+    # 是否允许最后兜底的整篇 rewrite（独立许可，不因选 repair 自动开）。默认关。
+    output_contract_allow_full_rewrite: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+    # strict 不可用 / 预算不足时的降级模式：repair / guide / off。默认 repair。
+    output_contract_strict_fallback: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="repair", default="repair"
+    )
+
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email})>"

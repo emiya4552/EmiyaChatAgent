@@ -76,6 +76,11 @@
 
     <MessageList :key="convStore.currentId ?? undefined" :messages="chatStore.messages" :persona-name="currentConv?.persona_name || ''" :persona-avatar-url="personaAvatarUrl" :greeting-nav="greetingNav" />
 
+    <!-- ADR-1g strict：草稿不流式，展示阶段状态直到最终文档一次性替换 -->
+    <div v-if="chatStore.contractStage" class="contract-stage-bar">
+      {{ contractStageLabel }}
+    </div>
+
     <div v-if="chatStore.error" class="error-bar">
       {{ chatStore.error }}
     </div>
@@ -120,6 +125,18 @@ import type { Relationship, PersonaListItem, PersonaDetail } from '../../types'
 const router = useRouter()
 const convStore = useConversationStore()
 const chatStore = useChatStore()
+
+// ADR-1g strict 阶段状态文案。
+const CONTRACT_STAGE_LABELS: Record<string, string> = {
+  drafting: '正在创作草稿…',
+  structuring: '正在结构化输出…',
+  rendering: '正在渲染结构…',
+  validating: '正在校验结构…',
+  refilling: '正在补全缺失区块…',
+}
+const contractStageLabel = computed(
+  () => CONTRACT_STAGE_LABELS[chatStore.contractStage] || '正在生成结构化回复…',
+)
 const authStore = useAuthStore()
 const msg = useMessage()
 
@@ -342,6 +359,15 @@ function handleStop() {
   flex-direction: column;
   min-width: 0;
   position: relative; /* ADR-0008d：承载右侧卡 UI 停靠栏（absolute） */
+}
+.contract-stage-bar {
+  margin: 0 20px 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  border-radius: 8px;
+  text-align: center;
 }
 .chat-header {
   padding: 10px 20px;
