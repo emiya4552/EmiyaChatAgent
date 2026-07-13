@@ -24,6 +24,8 @@ export const useChatStore = defineStore('chat', () => {
   const messages = ref<Message[]>([])
   const isStreaming = ref(false)
   const streamingContent = ref('')
+  // ADR-1g strict：草稿不流式，只显示阶段状态（drafting/structuring/…）。空串=非 strict。
+  const contractStage = ref<string>('')
   const error = ref<string | null>(null)
   // MVU 诊断运行时视图（ADR-0003 §3）：每轮 message_done 派生，仅当前对话
   const mvuRuntimeView = ref<import('../types').MvuRuntimeView | null>(null)
@@ -235,9 +237,14 @@ export const useChatStore = defineStore('chat', () => {
           aiMsg.content = streamingContent.value
         }
       },
+      onContractStage(stage) {
+        // strict：草稿不流式，用阶段状态提示用户；done 时清空，等 message_done 替换正文。
+        contractStage.value = stage === 'done' ? '' : stage
+      },
       onDone(data) {
         isStreaming.value = false
         streamingContent.value = ''
+        contractStage.value = ''
         abortController = null
         // 用后端返回的真 Message.id 替换 aiTempId；用 final_content 覆盖流式累积版
         // （content=prompt 真相版）；final_display_content 是显示版（ADR-0003 双管线），
@@ -250,6 +257,9 @@ export const useChatStore = defineStore('chat', () => {
           }
           if (typeof data?.final_display_content === 'string') {
             aiMsg.display_content = data.final_display_content
+          }
+          if (data?.output_contract) {
+            aiMsg.output_contract = data.output_contract
           }
         }
         if (data?.mvu_runtime_view) {
@@ -287,6 +297,7 @@ export const useChatStore = defineStore('chat', () => {
       onError(err, partialMessageId) {
         error.value = err
         isStreaming.value = false
+        contractStage.value = ''
         abortController = null
         // 中断时如有 partial_message_id（已落库的不完整消息），替换 aiTempId 并补 [流式中断]
         if (partialMessageId) {
@@ -355,11 +366,16 @@ export const useChatStore = defineStore('chat', () => {
         const aiMsg = messages.value.find((m) => m.id === liveAiMsgId)
         if (aiMsg) aiMsg.content = streamingContent.value
       },
+      onContractStage(stage) {
+        if (abortController) return
+        contractStage.value = stage === 'done' ? '' : stage
+      },
       onDone(data) {
         // 如果用户自己正在发消息，不覆盖 state
         if (abortController) return
         isStreaming.value = false
         streamingContent.value = ''
+        contractStage.value = ''
         // 用真 id 替换 liveAiMsgId 消息；final_content=prompt 真相版，
         // final_display_content=显示版（ADR-0003 双管线，MessageBubble 优先渲染）
         if (liveAiMsgId) {
@@ -371,6 +387,9 @@ export const useChatStore = defineStore('chat', () => {
             }
             if (typeof data?.final_display_content === 'string') {
               aiMsg.display_content = data.final_display_content
+            }
+            if (data?.output_contract) {
+              aiMsg.output_contract = data.output_contract
             }
           }
         }
@@ -415,6 +434,7 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     isStreaming,
     streamingContent,
+    contractStage,
     error,
     mvuRuntimeView,
     tokenBudgetReport,

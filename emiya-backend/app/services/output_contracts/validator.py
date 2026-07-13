@@ -115,6 +115,48 @@ _SECTION_DETECTORS: dict[str, Callable[[str], "tuple[int | None, int]"]] = {
 }
 
 
+# ── content_policy: 最小非空判定（ADR-1e §内容非空判定）──────────────
+# 剥掉外壳（标签 / summary / 选项 marker）与空白后内容区长度 > 0 即视为非空；
+# 不引入字数或质量阈值——那些是软约束，只进 Prompt，不作为空壳判据。
+
+
+def _empty_options(reply: str) -> bool:
+    """已定位的选项区块里，任一已出现的 A/B/C/D 只有 marker、无描述即视为空。"""
+    for _letter, rx in _OPTION_RES.items():
+        m = rx.search(reply)
+        if m is None:
+            continue  # 缺项由 _locate_options 记 missing，这里只看已出现项
+        line = reply[m.end():].split("\n", 1)[0]
+        if not _strip_tags(line).strip():
+            return True
+    return False
+
+
+def _empty_details(reply: str, keyword: str) -> bool:
+    """summary 命中 keyword 的折叠块，去掉 summary 与标签后全为空即视为空。"""
+    blocks = [
+        m.group(0)
+        for m in _DETAILS_BLOCK_RE.finditer(reply)
+        if (s := _SUMMARY_RE.search(m.group(0))) and keyword in _strip_tags(s.group(1))
+    ]
+    if not blocks:
+        return False  # 未命中块交给存在性校验，不在这里记空
+    for block in blocks:
+        inner = _SUMMARY_RE.sub("", block)
+        if _strip_tags(inner).strip():
+            return False  # 有一个块非空即算非空
+    return True
+
+
+# 按 section name 的非空检查器；只覆盖内容区可确定性度量的 kind。
+# chapter（markdown_heading）定位即含标题文本、body（narrative）无 detector，故不列。
+_SECTION_EMPTY_CHECKS: dict[str, Callable[[str], bool]] = {
+    "options": _empty_options,
+    "backend_log": lambda reply: _empty_details(reply, "后台日志"),
+    "hidden_plot": lambda reply: _empty_details(reply, "隐藏剧情"),
+}
+
+
 def _visible_text(reply: str) -> str:
     """玩家可见正文：剥掉所有 <details> 折叠块。"""
     return _DETAILS_BLOCK_RE.sub("", reply)
@@ -165,6 +207,13 @@ def _validate_full_document(reply: str, contract: VisibleOutputContract) -> Cont
         if section.name in _ONCE_SECTIONS and count > 1:
             warnings.append({"code": "duplicate_section", "section": section.name})
 
+        # content_policy=non_empty：区块存在但内容为空壳也算失败（ADR-1e）。
+        # 只有 compiler 编译过的 section 才带 non_empty；未编译契约默认 allow_empty。
+        if section.content_policy == "non_empty":
+            empty_check = _SECTION_EMPTY_CHECKS.get(section.name)
+            if empty_check is not None and empty_check(reply):
+                missing.append({"section": section.name, "code": "empty_section"})
+
     # 顺序：按契约 order 排列已定位区块，相邻逆序即报错。
     ordered = sorted(
         (s for s in checkable if s.name in located),
@@ -194,6 +243,25 @@ def _validate_full_document(reply: str, contract: VisibleOutputContract) -> Cont
         forbidden_hits=forbidden_hits,
         warnings=warnings,
     )
+
+
+def locate_section_positions(
+    reply: str,
+    contract: VisibleOutputContract,
+) -> dict[str, int]:
+    """返回已定位硬校验 section 的起始位置（name → char offset）。
+
+    供 executor 槽位补写按契约顺序插入缺失区块；只覆盖有 detector 的 section。
+    """
+    positions: dict[str, int] = {}
+    for section in contract.required_sections:
+        detector = _SECTION_DETECTORS.get(section.name)
+        if detector is None:
+            continue
+        pos, _ = detector(reply or "")
+        if pos is not None:
+            positions[section.name] = pos
+    return positions
 
 
 def validate_visible_output(

@@ -34,6 +34,14 @@
             @click="onGreetingNext"
           >›</button>
         </div>
+        <div
+          v-if="contractBadge"
+          class="oc-badge"
+          :class="contractBadge.cls"
+          :title="contractBadge.tip"
+        >
+          {{ contractBadge.label }}
+        </div>
       </div>
       <img
         v-if="message.role === 'user' && authStore.user?.avatar_url"
@@ -113,9 +121,73 @@ const formattedTime = computed(() => {
   const d = new Date(props.message.created_at)
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 })
+
+// 可见输出契约徽章（ADR-1f 稳定诊断结构）：仅 assistant 消息、本轮有激活契约时显示。
+const contractBadge = computed(() => {
+  const oc = props.message.output_contract
+  if (!oc || !oc.contract_mode || oc.contract_mode === 'none') return null
+  if (oc.outcome === 'disabled') return null // off / 无契约不打扰
+  const outcome = oc.outcome
+  const method = oc.method ?? 'initial'
+  const repaired = method !== 'initial'
+  let label = '格式契约'
+  let cls = 'ok'
+  if (outcome === 'conflict') {
+    label = '格式契约冲突'
+    cls = 'fail'
+  } else if (outcome === 'passed' && oc.coverage === 'partial') {
+    label = repaired ? '格式已修复（部分保证）' : '格式 ✓（部分保证）'
+    cls = repaired ? 'fixed' : 'ok'
+  } else if (outcome === 'passed' && repaired) {
+    label = '格式已修复'
+    cls = 'fixed'
+  } else if (outcome === 'passed') {
+    label = '格式 ✓'
+    cls = 'ok'
+  } else if (outcome === 'failed') {
+    label = '格式未满足'
+    cls = 'fail'
+  }
+  const bits: string[] = []
+  if (oc.coverage) bits.push(`覆盖:${oc.coverage}`)
+  if (method) bits.push(`方式:${method}`)
+  // strict 降级等：请求模式与实际生效模式不一致时提示（ADR-1f）。
+  if (oc.requested_mode && oc.effective_mode && oc.requested_mode !== oc.effective_mode) {
+    bits.push(`模式:${oc.requested_mode}→${oc.effective_mode}`)
+  }
+  const conflicts = Array.isArray(oc.conflicts) ? oc.conflicts.length : 0
+  if (conflicts) bits.push(`冲突:${conflicts}`)
+  if (oc.extra_calls) bits.push(`额外调用:${oc.extra_calls}`)
+  const guaranteed = Array.isArray(oc.guaranteed_rules) ? oc.guaranteed_rules.length : 0
+  const soft = Array.isArray(oc.soft_rules) ? oc.soft_rules.length : 0
+  if (guaranteed || soft) bits.push(`程序保证:${guaranteed} 软:${soft}`)
+  return { label, cls, tip: bits.join(' · ') || '本轮可见输出契约' }
+})
 </script>
 
 <style scoped>
+.oc-badge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  border-radius: 10px;
+  cursor: default;
+  user-select: none;
+}
+.oc-badge.ok {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.12);
+}
+.oc-badge.fixed {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.12);
+}
+.oc-badge.fail {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.14);
+}
 .timestamp-divider {
   display: flex;
   justify-content: center;

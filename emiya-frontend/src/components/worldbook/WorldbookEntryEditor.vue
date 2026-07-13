@@ -34,6 +34,16 @@
             <div class="contract-meta">
               {{ contractMeta }}
             </div>
+            <div v-if="contractStale" class="contract-stale">
+              条目内容已改动，识别结果可能过期——请重新“AI 识别此条目”或保存后重新识别。
+            </div>
+            <ul v-if="contractSections.length" class="contract-sections">
+              <li v-for="(s, i) in contractSections" :key="i">
+                {{ s.order }}. {{ s.name }}
+                <span v-if="s.marker" class="contract-marker">（{{ s.marker }}）</span>
+                <span class="contract-flag">{{ s.required ? '必填' : '可选' }}</span>
+              </li>
+            </ul>
           </div>
           <n-button
             size="small"
@@ -359,12 +369,29 @@ const contractMeta = computed(() => {
   const oc = outputContract.value
   if (!oc) return '尚未保存识别结果。保存或点击识别后，聊天运行时会读取这里的结果。'
   const source = oc.source ? `来源：${oc.source}` : '来源：未知'
+  const trigger = oc.trigger ? `触发：${oc.trigger}` : ''
   const confidence = typeof oc.confidence === 'number'
     ? `置信度：${Math.round(oc.confidence * 100)}%`
     : '置信度：未知'
   const reason = oc.reason ? `原因：${oc.reason}` : ''
-  return [source, confidence, reason].filter(Boolean).join(' · ')
+  const version = oc.detector_version ? `识别器：${oc.detector_version}` : ''
+  return [source, trigger, confidence, reason, version].filter(Boolean).join(' · ')
 })
+
+// 契约摘要里声明的受控 sections（供用户核对整篇结构顺序 / marker / 必填）。
+const contractSections = computed<Array<{ name: string; marker: string; order: number; required: boolean }>>(() => {
+  const raw = outputContract.value?.abstract?.sections
+  if (!Array.isArray(raw)) return []
+  return raw.map((s: any, i: number) => ({
+    name: String(s?.name ?? `section_${i}`),
+    marker: String(s?.marker ?? ''),
+    order: Number(s?.order ?? i * 10),
+    required: s?.required !== false,
+  }))
+})
+
+// 条目内容改动后 content_hash 失效：识别结果标记为需要重检。
+const contractStale = computed(() => outputContract.value?.status === 'stale')
 </script>
 
 <style scoped>
@@ -390,6 +417,20 @@ const contractMeta = computed(() => {
   font-size: 12px;
   line-height: 1.5;
 }
+.contract-stale {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #d97706;
+}
+.contract-sections {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.contract-marker { color: var(--color-text-tertiary); }
+.contract-flag { margin-left: 6px; color: var(--color-text-tertiary); }
 .inherit-tag {
   display: inline-block; margin-left: 6px;
   font-size: 11px; padding: 1px 6px; border-radius: 4px;

@@ -108,20 +108,14 @@ def _entry_contract(entry: dict) -> dict:
     return oc if isinstance(oc, dict) else {}
 
 
-def build_visible_output_contract(
-    wi_activated: list[dict] | None,
-    chat_config: dict | None = None,
-) -> VisibleOutputContract:
-    """从已激活条目的持久化 output_contract 构建运行时契约。
+def iter_contract_candidates(wi_activated: list[dict] | None) -> list[dict[str, Any]]:
+    """按 entry 逐个产出候选契约片段，供 compiler 做权威性选主与冲突检测。
 
-    `chat_config` 目前只用于保持接口稳定，后续可承接用户级契约配置。
+    每个候选保留来源 entry 的识别元数据（`oc`），因此 compiler 能按
+    `source / trigger / reviewed / order / confidence` 计算权威性，而不必再回读 entry。
+    契约类型：`tail` / `inline` / `full_document`。
     """
-    _ = chat_config
-    tail_blocks: list[TailBlockContract] = []
-    sections: list[SectionContract] = []
-    sources: list[ContractSource] = []
-    mode = OutputContractMode.NONE
-
+    candidates: list[dict[str, Any]] = []
     for entry in wi_activated or []:
         if not isinstance(entry, dict) or _is_disabled(entry):
             continue
@@ -136,15 +130,61 @@ def build_visible_output_contract(
             continue
 
         source = _source_from_entry(entry)
-        sources.append(source)
         abstract = oc.get("abstract") if isinstance(oc.get("abstract"), dict) else {}
+        order = _order_from_entry(entry)
         if ctype in {"tail_html", "tail_markdown", "tail_json"}:
-            tail_blocks.append(_tail_block_from_entry(entry, oc, source))
+            candidates.append({
+                "kind": "tail",
+                "tail": _tail_block_from_entry(entry, oc, source),
+                "sections": [],
+                "source": source,
+                "oc": oc,
+                "order": order,
+            })
         elif ctype == "inline_section":
-            sections.extend(_normalise_sections(abstract.get("sections"), source))
+            candidates.append({
+                "kind": "inline",
+                "tail": None,
+                "sections": _normalise_sections(abstract.get("sections"), source),
+                "source": source,
+                "oc": oc,
+                "order": order,
+            })
         elif ctype == "full_document":
             configured = _normalise_sections(abstract.get("sections"), source)
-            sections.extend(configured or _full_document_sections(source))
+            candidates.append({
+                "kind": "full_document",
+                "tail": None,
+                "sections": configured or _full_document_sections(source),
+                "source": source,
+                "oc": oc,
+                "order": order,
+            })
+    return candidates
+
+
+def build_visible_output_contract(
+    wi_activated: list[dict] | None,
+    chat_config: dict | None = None,
+) -> VisibleOutputContract:
+    """从已激活条目的持久化 output_contract 构建运行时契约。
+
+    `chat_config` 目前只用于保持接口稳定，后续可承接用户级契约配置。
+    多候选权威性选主与冲突检测在 compiler 层做（ADR-1e）；此处沿用"全部 section
+    并入"的合并策略，保证 tail-only / 单 full_document 场景行为不变。
+    """
+    _ = chat_config
+    tail_blocks: list[TailBlockContract] = []
+    sections: list[SectionContract] = []
+    sources: list[ContractSource] = []
+    mode = OutputContractMode.NONE
+
+    for cand in iter_contract_candidates(wi_activated):
+        sources.append(cand["source"])
+        if cand["kind"] == "tail":
+            tail_blocks.append(cand["tail"])
+        else:
+            sections.extend(cand["sections"])
 
     if sections:
         mode = OutputContractMode.FULL_DOCUMENT

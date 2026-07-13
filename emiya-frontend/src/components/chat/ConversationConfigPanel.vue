@@ -299,6 +299,43 @@
         </div>
       </n-collapse-item>
 
+      <n-collapse-item title="可见输出格式契约" name="output_contract">
+        <div class="params-grid">
+          <n-form-item label="执行模式" label-placement="left">
+            <n-select
+              v-model:value="ocModeControl"
+              :options="ocModeOptions"
+              style="width: 220px"
+            />
+            <span class="switch-hint">
+              本对话如何处理世界书要求的可见格式（ADR-1f）。“继承账户默认”时用设置页的默认模式；
+              auto=状态栏自动补写、整篇只约束+诊断；repair=确定性修复+缺失槽位补写；
+              strict=分阶段结构化生成（延迟/成本更高，草稿不流式）。只保证结构，不承诺剧情质量。
+            </span>
+          </n-form-item>
+          <n-form-item label="整篇 rewrite 兜底" label-placement="left">
+            <n-select
+              v-model:value="ocRewriteControl"
+              :options="ocRewriteOptions"
+              style="width: 160px"
+            />
+            <span class="switch-hint">独立许可，默认继承账户设置；开启后仅在局部修复不足时最多整篇重写一次。</span>
+          </n-form-item>
+          <n-form-item label="strict 降级" label-placement="left">
+            <n-select
+              v-model:value="ocStrictFallbackControl"
+              :options="ocFallbackOptions"
+              style="width: 160px"
+            />
+            <span class="switch-hint">strict 不可用或预算不足时的降级模式。</span>
+          </n-form-item>
+          <div v-if="lastContractDiag" class="oc-last-round">
+            <strong>上轮结构结果：</strong>
+            <span>{{ lastContractSummary }}</span>
+          </div>
+        </div>
+      </n-collapse-item>
+
       <n-collapse-item title="Author's Note 作者笔记" name="an">
         <n-form-item label="内容" label-placement="top">
           <n-input
@@ -352,7 +389,7 @@ import { fetchTemplates } from '../../api/template'
 import { fetchRegexPresets } from '../../api/regexPreset'
 import type {
   ChatConfig, WorldbookListItem, PresetInfo, TemplateListItem, RegexPresetInfo,
-  MvuUpdateInfo, TokenBudgetReport,
+  MvuUpdateInfo, TokenBudgetReport, OutputContractDiag,
 } from '../../types'
 
 const props = defineProps<{ visible: boolean }>()
@@ -662,6 +699,71 @@ const AN_ROLE_OPTIONS = [
   { label: 'user', value: 'user' },
   { label: 'assistant', value: 'assistant' },
 ]
+
+// 可见输出契约执行覆盖（ADR-1f）；'inherit' → localConfig 存 null = 继承账户默认。
+// n-select 的 value 只接受 string/number，因此用 'inherit' 哨兵 + computed 适配到
+// ChatConfig 的 null / boolean 存储。
+const ocModeOptions = [
+  { label: '继承账户默认', value: 'inherit' },
+  { label: 'off（关闭）', value: 'off' },
+  { label: 'auto（按类型自动）', value: 'auto' },
+  { label: 'guide（只约束+诊断）', value: 'guide' },
+  { label: 'repair（修复+补写）', value: 'repair' },
+  { label: 'strict（结构化生成）', value: 'strict' },
+]
+const ocRewriteOptions = [
+  { label: '继承', value: 'inherit' },
+  { label: '允许', value: 'yes' },
+  { label: '禁止', value: 'no' },
+]
+const ocFallbackOptions = [
+  { label: '继承', value: 'inherit' },
+  { label: 'repair', value: 'repair' },
+  { label: 'guide', value: 'guide' },
+  { label: 'off', value: 'off' },
+]
+const ocModeControl = computed<string>({
+  get: () => localConfig.value.output_contract_mode ?? 'inherit',
+  set: (s) => { localConfig.value.output_contract_mode = s === 'inherit' ? null : s },
+})
+const ocStrictFallbackControl = computed<string>({
+  get: () => localConfig.value.output_contract_strict_fallback ?? 'inherit',
+  set: (s) => { localConfig.value.output_contract_strict_fallback = s === 'inherit' ? null : s },
+})
+const ocRewriteControl = computed<string>({
+  get: () => {
+    const v = localConfig.value.output_contract_allow_full_rewrite
+    return v === true ? 'yes' : v === false ? 'no' : 'inherit'
+  },
+  set: (s) => {
+    localConfig.value.output_contract_allow_full_rewrite =
+      s === 'yes' ? true : s === 'no' ? false : null
+  },
+})
+
+// 上一轮结构结果：取最近一条带 output_contract 的 assistant 消息诊断。
+const lastContractDiag = computed(() => {
+  const msgs = chatStore.messages as Array<{ role: string; output_contract?: OutputContractDiag | null }>
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const oc = msgs[i]?.output_contract
+    if (msgs[i]?.role === 'assistant' && oc && oc.contract_mode && oc.contract_mode !== 'none') {
+      return oc
+    }
+  }
+  return null
+})
+const lastContractSummary = computed(() => {
+  const oc = lastContractDiag.value
+  if (!oc) return ''
+  const parts = [`${oc.contract_mode} · ${oc.outcome}`]
+  if (oc.coverage) parts.push(`覆盖 ${oc.coverage}`)
+  if (oc.method) parts.push(`方式 ${oc.method}`)
+  if (oc.requested_mode && oc.effective_mode && oc.requested_mode !== oc.effective_mode) {
+    parts.push(`模式 ${oc.requested_mode}→${oc.effective_mode}`)
+  }
+  if (Array.isArray(oc.conflicts) && oc.conflicts.length) parts.push(`冲突 ${oc.conflicts.length}`)
+  return parts.join(' · ')
+})
 
 watch(() => props.visible, async (v) => {
   if (!v) return

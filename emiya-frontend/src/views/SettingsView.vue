@@ -145,6 +145,44 @@
           <n-divider />
 
           <div class="section">
+            <h3 class="section-title">可见输出格式执行（新对话默认）</h3>
+            <n-form-item label="默认执行模式">
+              <n-select
+                v-model:value="outputContractDefaultMode"
+                :options="outputContractModeOptions"
+                :loading="savingOutputContractExec"
+                style="width: 240px"
+                @update:value="saveOutputContractDefaultMode"
+              />
+            </n-form-item>
+            <n-form-item label="允许整篇 rewrite 兜底">
+              <n-switch
+                v-model:value="outputContractAllowFullRewrite"
+                :loading="savingOutputContractExec"
+                @update:value="saveOutputContractAllowFullRewrite"
+              />
+            </n-form-item>
+            <n-form-item label="strict 不可用时降级">
+              <n-select
+                v-model:value="outputContractStrictFallback"
+                :options="outputContractFallbackOptions"
+                :loading="savingOutputContractExec"
+                style="width: 200px"
+                @update:value="saveOutputContractStrictFallback"
+              />
+            </n-form-item>
+            <p class="hint">
+              该设置决定<strong>聊天时</strong>如何处理世界书要求的可见输出格式，与上面的“导入期识别”是两回事。
+              <br />· <strong>auto</strong>（默认）：状态栏尾部块自动补写；整篇结构只注入约束并诊断，不自动改写回复。
+              <br />· <strong>guide</strong>：只注入约束 + 诊断；<strong>repair</strong>：额外做确定性修复与缺失槽位补写；
+              <strong>strict</strong>：由代码分阶段生成并确定性渲染结构（延迟与 token 消耗更高，原始草稿不流式显示）。
+              <br />这些只保证已列出的结构规则，不承诺剧情质量。整篇 rewrite 为独立许可，默认关闭。
+            </p>
+          </div>
+
+          <n-divider />
+
+          <div class="section">
             <h3 class="section-title">全局 CSS 主题</h3>
             <p class="hint">
               这里写的 CSS 对所有对话生效；角色卡自带样式会在全局样式之后注入，因此可以覆盖这里的规则。
@@ -323,7 +361,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  NButton, NDivider, NForm, NFormItem, NIcon, NInput, NInputNumber, NSwitch,
+  NButton, NDivider, NForm, NFormItem, NIcon, NInput, NInputNumber, NSelect, NSwitch,
   NTabPane, NTag, NTabs, NUpload, useDialog, useMessage,
 } from 'naive-ui'
 import {
@@ -423,6 +461,63 @@ async function saveOutputContractDetectionLimit() {
     message.error(err.response?.data?.detail || '保存失败')
   } finally {
     savingOutputContractDetection.value = false
+  }
+}
+
+// 可见输出格式聊天期执行默认（ADR-1f）：新对话继承，单个对话可在配置面板覆盖。
+const outputContractDefaultMode = ref(user.value?.output_contract_default_mode ?? 'auto')
+const outputContractAllowFullRewrite = ref(user.value?.output_contract_allow_full_rewrite ?? false)
+const outputContractStrictFallback = ref(user.value?.output_contract_strict_fallback ?? 'repair')
+const savingOutputContractExec = ref(false)
+const outputContractModeOptions = [
+  { label: 'auto（按类型自动）', value: 'auto' },
+  { label: 'off（关闭）', value: 'off' },
+  { label: 'guide（只约束+诊断）', value: 'guide' },
+  { label: 'repair（修复+补写）', value: 'repair' },
+  { label: 'strict（结构化生成）', value: 'strict' },
+]
+const outputContractFallbackOptions = [
+  { label: 'repair', value: 'repair' },
+  { label: 'guide', value: 'guide' },
+  { label: 'off', value: 'off' },
+]
+
+async function saveOutputContractDefaultMode(v: string) {
+  savingOutputContractExec.value = true
+  try {
+    await authStore.updateMe({ output_contract_default_mode: v })
+    message.success(`新对话默认执行模式：${v}`)
+  } catch (err: any) {
+    outputContractDefaultMode.value = user.value?.output_contract_default_mode ?? 'auto'
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingOutputContractExec.value = false
+  }
+}
+
+async function saveOutputContractAllowFullRewrite(v: boolean) {
+  savingOutputContractExec.value = true
+  try {
+    await authStore.updateMe({ output_contract_allow_full_rewrite: v })
+    message.success(v ? '已允许整篇 rewrite 兜底' : '已关闭整篇 rewrite 兜底')
+  } catch (err: any) {
+    outputContractAllowFullRewrite.value = !v
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingOutputContractExec.value = false
+  }
+}
+
+async function saveOutputContractStrictFallback(v: string) {
+  savingOutputContractExec.value = true
+  try {
+    await authStore.updateMe({ output_contract_strict_fallback: v })
+    message.success(`strict 不可用时降级为：${v}`)
+  } catch (err: any) {
+    outputContractStrictFallback.value = user.value?.output_contract_strict_fallback ?? 'repair'
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingOutputContractExec.value = false
   }
 }
 
