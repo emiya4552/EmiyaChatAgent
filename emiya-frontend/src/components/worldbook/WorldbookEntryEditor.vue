@@ -30,6 +30,13 @@
               <n-tag size="small" :type="contractTagType">
                 {{ contractLabel }}
               </n-tag>
+              <n-tag
+                v-if="outputContract && outputContract.lifecycle.status !== 'none'"
+                size="small"
+                :type="contractConfirmed ? 'success' : 'warning'"
+              >
+                {{ contractConfirmed ? '已确认/声明' : '未确认草稿' }}
+              </n-tag>
             </div>
             <div class="contract-meta">
               {{ contractMeta }}
@@ -45,12 +52,86 @@
               </li>
             </ul>
           </div>
+          <div class="contract-actions">
+            <n-button
+              size="small"
+              :loading="detectingOutputContract"
+              @click="$emit('detect-output-contract')"
+            >
+              AI 识别此条目
+            </n-button>
+            <n-button
+              size="small"
+              :loading="confirmingOutputContract"
+              :disabled="!outputContract || contractConfirmed"
+              @click="$emit('confirm-output-contract')"
+            >
+              确认识别结果
+            </n-button>
+            <n-button
+              size="small"
+              :loading="declaringOutputContract"
+              @click="emitDeclareTail"
+            >
+              声明为尾部模板
+            </n-button>
+            <n-button
+              v-if="outputContract"
+              size="small"
+              :loading="updatingOutputContract"
+              @click="emitToggleContract"
+            >
+              {{ outputContract.enabled ? '禁用契约' : '启用契约' }}
+            </n-button>
+            <n-button
+              v-if="outputContract?.latest_auto_definition"
+              size="small"
+              :loading="restoringOutputContract"
+              @click="$emit('restore-auto-output-contract')"
+            >
+              恢复自动候选
+            </n-button>
+          </div>
+        </div>
+
+        <div v-if="canonicalSections && canonicalSections.length" class="contract-declare">
+          <div class="declare-title">
+            显式声明输出模板
+            <WorldbookHelpHint>
+              <div>
+                勾选本条目要求回复包含的结构区块，保存后作为<b>用户声明</b>
+                （source=manual、已确认），权威性高于任何自动识别，运行时优先采用。<br />
+                不勾选任何项并保存＝声明“本条目无输出模板”。
+              </div>
+            </WorldbookHelpHint>
+          </div>
+          <n-form-item label="文档类型" label-placement="left">
+            <n-select v-model:value="documentKind" :options="DOCUMENT_KIND_OPTIONS" style="width: 240px" />
+          </n-form-item>
+          <div v-if="documentKind === 'full_document' || documentKind === 'inline_section'" class="section-definition-list">
+            <div v-for="cs in canonicalSections" :key="cs.name" class="section-definition-row">
+              <n-checkbox
+                :checked="declaredSections.includes(cs.name)"
+                @update:checked="setDeclaredSection(cs.name, $event)"
+              >
+                {{ cs.label }}
+                <span class="declare-hint">（{{ cs.name }}{{ cs.marker ? ' · ' + cs.marker : '' }}）</span>
+              </n-checkbox>
+              <template v-if="declaredSections.includes(cs.name)">
+                <span class="section-control-label">顺序</span>
+                <n-input-number v-model:value="sectionSettings[cs.name].order" :min="0" :max="9999" size="small" />
+                <span class="section-control-label">必填</span>
+                <n-switch v-model:value="sectionSettings[cs.name].required" size="small" />
+              </template>
+            </div>
+          </div>
           <n-button
             size="small"
-            :loading="detectingOutputContract"
-            @click="$emit('detect-output-contract')"
+            type="primary"
+            :loading="declaringOutputContract"
+            @click="emitSaveDefinition"
           >
-            AI 识别此条目
+            保存为模板
           </n-button>
         </div>
 
@@ -283,13 +364,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   NButton, NInput, NSwitch, NCollapse, NCollapseItem, NFormItem,
-  NDynamicTags, NSelect, NInputNumber, NTag,
+  NDynamicTags, NSelect, NInputNumber, NTag, NCheckbox,
 } from 'naive-ui'
 import WorldbookHelpHint from './WorldbookHelpHint.vue'
 import type { WorldbookEntry } from '../../types'
+import type { CanonicalSection } from '../../api/worldbook'
 
 const props = defineProps<{
   entry: WorldbookEntry | null
@@ -299,11 +381,94 @@ const props = defineProps<{
     match_whole_words: boolean
   }
   detectingOutputContract?: boolean
+  canonicalSections?: CanonicalSection[]
+  declaringOutputContract?: boolean
+  confirmingOutputContract?: boolean
+  updatingOutputContract?: boolean
+  restoringOutputContract?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'detect-output-contract'): void
+  (e: 'declare-output-contract', payload: { mode: string; section_names: string[] }): void
+  (e: 'save-output-contract-definition', payload: { definition: Record<string, unknown> }): void
+  (e: 'confirm-output-contract'): void
+  (e: 'update-output-contract', payload: { enabled: boolean }): void
+  (e: 'restore-auto-output-contract'): void
 }>()
+
+// 声明区：勾选 canonical section 显式声明输出模板。切换条目时用当前契约里已有的
+// canonical sections 预填，方便在识别结果基础上微调后声明。
+const declaredSections = ref<string[]>([])
+const documentKind = ref('full_document')
+const sectionSettings = ref<Record<string, { order: number; required: boolean }>>({})
+watch(
+  () => props.entry?.uid,
+  () => {
+    const raw = props.entry?.output_contract?.definition?.sections
+    const canonical = props.canonicalSections || []
+    const known = new Set(canonical.map(c => c.name))
+    declaredSections.value = Array.isArray(raw)
+      ? raw.map((s: any) => String(s?.id ?? '')).filter((n: string) => known.has(n))
+      : []
+    documentKind.value = props.entry?.output_contract?.definition?.document_kind || 'full_document'
+    const existing = new Map(Array.isArray(raw) ? raw.map((s: any) => [String(s?.id ?? ''), s]) : [])
+    sectionSettings.value = Object.fromEntries(canonical.map((section) => {
+      const saved: any = existing.get(section.name)
+      return [section.name, {
+        order: Number(saved?.order ?? section.order),
+        required: saved?.required !== false,
+      }]
+    }))
+  },
+  { immediate: true },
+)
+
+function setDeclaredSection(name: string, checked: boolean) {
+  declaredSections.value = checked
+    ? [...declaredSections.value, name]
+    : declaredSections.value.filter((value) => value !== name)
+}
+
+function emitSaveDefinition() {
+  const canonical = new Map((props.canonicalSections || []).map((section) => [section.name, section]))
+  const sections = declaredSections.value
+    .map((name) => {
+      const section = canonical.get(name)
+      const settings = sectionSettings.value[name]
+      if (!section || !settings) return null
+      return {
+        id: section.name,
+        label: section.label,
+        order: settings.order,
+        required: settings.required,
+      }
+    })
+    .filter(Boolean)
+  emit('save-output-contract-definition', {
+    definition: {
+      document_kind: documentKind.value,
+      placement: documentKind.value.startsWith('tail_') ? 'tail' : documentKind.value,
+      sections,
+    },
+  })
+}
+
+// ADR-2e：声明本条目内容为尾部模板（marker / span_hint 由后端从原文提取）。
+function emitDeclareTail() {
+  emit('declare-output-contract', { mode: 'append_tail', section_names: [] })
+}
+
+function emitToggleContract() {
+  if (!outputContract.value) return
+  emit('update-output-contract', { enabled: !outputContract.value.enabled })
+}
+
+// ADR-2d：契约是否已确认/声明（reviewed=true 或 source=manual），未确认即自动识别草稿。
+const contractConfirmed = computed(() => {
+  const oc = outputContract.value as any
+  return !!oc && (oc.lifecycle?.reviewed === true || oc.provenance?.source === 'manual')
+})
 
 // 三个 nullable 字段：getter 用书级回退展示有效值；setter 如实写入 entry。
 // null = "继承书级"（清空按钮回到此状态）；非 null = 显式覆盖。
@@ -325,6 +490,15 @@ const LOGIC_OPTIONS = [
   { label: 'NOT_ALL (不全命中)', value: 1 },
   { label: 'NOT_ANY (任一命中则不激活)', value: 2 },
   { label: 'AND_ALL (全部命中)', value: 3 },
+]
+
+const DOCUMENT_KIND_OPTIONS = [
+  { label: '整篇固定结构', value: 'full_document' },
+  { label: '正文内区块', value: 'inline_section' },
+  { label: 'HTML 尾部模板', value: 'tail_html' },
+  { label: 'Markdown 尾部模板', value: 'tail_markdown' },
+  { label: 'JSON 尾部模板', value: 'tail_json' },
+  { label: '无输出模板', value: 'none' },
 ]
 
 const POSITION_OPTIONS = [
@@ -353,37 +527,37 @@ const outputContract = computed(() => props.entry?.output_contract || null)
 const contractLabel = computed(() => {
   const oc = outputContract.value
   if (!oc) return '未识别'
-  if (oc.status === 'detected' || oc.status === 'manual') return String(oc.type || 'detected')
-  if (oc.status === 'none') return '非模板'
-  if (oc.status === 'stale') return '需重检'
+  if (oc.lifecycle?.status === 'active') return String(oc.definition?.document_kind || 'active')
+  if (oc.lifecycle?.status === 'none') return '非模板'
+  if (oc.is_stale) return '需复核'
   return '未知'
 })
 const contractTagType = computed(() => {
-  const status = outputContract.value?.status
-  if (status === 'detected' || status === 'manual') return 'success'
-  if (status === 'stale' || status === 'unknown') return 'warning'
-  if (status === 'none') return 'default'
+  const oc = outputContract.value
+  if (oc?.is_stale || oc?.lifecycle?.status === 'unknown') return 'warning'
+  if (oc?.lifecycle?.status === 'active') return oc.enabled ? 'success' : 'default'
+  if (oc?.lifecycle?.status === 'none') return 'default'
   return 'info'
 })
 const contractMeta = computed(() => {
   const oc = outputContract.value
   if (!oc) return '尚未保存识别结果。保存或点击识别后，聊天运行时会读取这里的结果。'
-  const source = oc.source ? `来源：${oc.source}` : '来源：未知'
-  const trigger = oc.trigger ? `触发：${oc.trigger}` : ''
-  const confidence = typeof oc.confidence === 'number'
-    ? `置信度：${Math.round(oc.confidence * 100)}%`
+  const source = oc.provenance?.source ? `来源：${oc.provenance.source}` : '来源：未知'
+  const trigger = oc.provenance?.trigger ? `触发：${oc.provenance.trigger}` : ''
+  const confidence = typeof oc.provenance?.confidence === 'number'
+    ? `置信度：${Math.round(oc.provenance.confidence * 100)}%`
     : '置信度：未知'
-  const reason = oc.reason ? `原因：${oc.reason}` : ''
-  const version = oc.detector_version ? `识别器：${oc.detector_version}` : ''
+  const reason = oc.provenance?.reason ? `原因：${oc.provenance.reason}` : ''
+  const version = oc.lifecycle?.detector_version ? `识别器：${oc.lifecycle.detector_version}` : ''
   return [source, trigger, confidence, reason, version].filter(Boolean).join(' · ')
 })
 
 // 契约摘要里声明的受控 sections（供用户核对整篇结构顺序 / marker / 必填）。
 const contractSections = computed<Array<{ name: string; marker: string; order: number; required: boolean }>>(() => {
-  const raw = outputContract.value?.abstract?.sections
+  const raw = outputContract.value?.definition?.sections
   if (!Array.isArray(raw)) return []
   return raw.map((s: any, i: number) => ({
-    name: String(s?.name ?? `section_${i}`),
+    name: String(s?.label ?? s?.id ?? `section_${i}`),
     marker: String(s?.marker ?? ''),
     order: Number(s?.order ?? i * 10),
     required: s?.required !== false,
@@ -391,7 +565,7 @@ const contractSections = computed<Array<{ name: string; marker: string; order: n
 })
 
 // 条目内容改动后 content_hash 失效：识别结果标记为需要重检。
-const contractStale = computed(() => outputContract.value?.status === 'stale')
+const contractStale = computed(() => outputContract.value?.is_stale === true)
 </script>
 
 <style scoped>
@@ -431,6 +605,23 @@ const contractStale = computed(() => outputContract.value?.status === 'stale')
 }
 .contract-marker { color: var(--color-text-tertiary); }
 .contract-flag { margin-left: 6px; color: var(--color-text-tertiary); }
+.contract-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.contract-declare {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px dashed var(--color-border-light);
+  border-radius: 8px;
+  background: var(--color-bg-base);
+}
+.section-definition-list { display: flex; flex-direction: column; gap: 8px; }
+.section-definition-row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.section-definition-row :deep(.n-checkbox) { min-width: 260px; }
+.section-control-label { color: var(--color-text-tertiary); font-size: 12px; }
+.declare-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.declare-hint { color: var(--color-text-tertiary); font-size: 12px; }
 .inherit-tag {
   display: inline-block; margin-left: 6px;
   font-size: 11px; padding: 1px 6px; border-radius: 4px;

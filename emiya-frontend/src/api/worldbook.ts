@@ -36,6 +36,57 @@ export async function detectWorldbookEntryOutputContract(
   return res.data
 }
 
+// ─── 输出契约声明 / canonical section（ADR-2b）───
+
+export interface CanonicalSection {
+  name: string
+  label: string
+  kind: string
+  marker: string
+  order: number
+}
+
+export async function fetchCanonicalSections(): Promise<CanonicalSection[]> {
+  const res = await api.get('/v1/worldbooks/output-contract/canonical-sections')
+  return res.data
+}
+
+/** 用户显式声明输出模板（source=manual, reviewed=true，最高权威）。 */
+export async function declareWorldbookEntryOutputContract(
+  id: string,
+  entryUid: number,
+  body: { mode: string; section_names: string[] },
+): Promise<Worldbook> {
+  const res = await api.put(`/v1/worldbooks/${id}/entries/${entryUid}/output-contract`, body)
+  return res.data
+}
+
+/** 把现有识别结果确认为 reviewed=true（只提权威性，不改内容）。 */
+export async function confirmWorldbookEntryOutputContract(
+  id: string,
+  entryUid: number,
+): Promise<Worldbook> {
+  const res = await api.post(`/v1/worldbooks/${id}/entries/${entryUid}/confirm-output-contract`)
+  return res.data
+}
+
+export async function updateWorldbookEntryOutputContract(
+  id: string,
+  entryUid: number,
+  body: { definition?: Record<string, unknown>; enabled?: boolean },
+): Promise<Worldbook> {
+  const res = await api.patch(`/v1/worldbooks/${id}/entries/${entryUid}/output-contract`, body)
+  return res.data
+}
+
+export async function restoreWorldbookEntryOutputContractAuto(
+  id: string,
+  entryUid: number,
+): Promise<Worldbook> {
+  const res = await api.post(`/v1/worldbooks/${id}/entries/${entryUid}/restore-auto-output-contract`)
+  return res.data
+}
+
 export async function deleteWorldbook(id: string): Promise<void> {
   await api.delete(`/v1/worldbooks/${id}`)
 }

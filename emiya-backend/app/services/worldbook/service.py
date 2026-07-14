@@ -7,7 +7,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.worldbook import Worldbook
-from app.services.output_contracts import annotate_entries, detect_single_entry
+from app.services.output_contracts import (
+    annotate_entries,
+    build_manual_contract,
+    detect_single_entry,
+)
+from app.services.output_contracts.attachment import (
+    accept_latest_auto_definition,
+    apply_manual_definition,
+    canonicalize_attachment,
+    mark_attachment_reviewed,
+    set_attachment_enabled,
+)
 from app.utils.exceptions import ForbiddenException, NotFoundException
 
 logger = logging.getLogger(__name__)
@@ -145,6 +156,144 @@ async def detect_worldbook_entry_output_contract(
             await db.refresh(wb)
             return wb
 
+    raise NotFoundException("世界书条目不存在")
+
+
+async def declare_entry_output_contract(
+    db: AsyncSession,
+    worldbook_id: UUID,
+    user_id: UUID,
+    entry_uid: int,
+    *,
+    mode: str,
+    section_names: list[str],
+) -> Worldbook:
+    """用户显式声明单条 entry 的输出模板（source=manual、reviewed=true），保存并返回。
+
+    声明是最高权威的输入（ADR-2b），运行时优先于任何启发式 / LLM 识别结果。
+    """
+    wb = await get_worldbook(db, worldbook_id, user_id)
+    if wb is None:
+        raise NotFoundException("世界书不存在")
+    if wb.user_id is None:
+        raise ForbiddenException("系统模板世界书不可编辑")
+
+    entries = [dict(e or {}) for e in (wb.entries or [])]
+    for idx, entry in enumerate(entries):
+        if int(entry.get("uid", -1)) == int(entry_uid):
+            entry["output_contract"] = build_manual_contract(
+                entry, mode=mode, section_names=section_names
+            )
+            entries[idx] = entry
+            wb.entries = entries
+            db.add(wb)
+            await db.commit()
+            await db.refresh(wb)
+            return wb
+
+    raise NotFoundException("世界书条目不存在")
+
+
+async def update_entry_output_contract(
+    db: AsyncSession,
+    worldbook_id: UUID,
+    user_id: UUID,
+    entry_uid: int,
+    *,
+    definition: dict | None = None,
+    enabled: bool | None = None,
+) -> Worldbook:
+    """保存人工 definition 或仅切换 Attachment 的启用状态。"""
+    wb = await get_worldbook(db, worldbook_id, user_id)
+    if wb is None:
+        raise NotFoundException("世界书不存在")
+    if wb.user_id is None:
+        raise ForbiddenException("系统模板世界书不可编辑")
+
+    entries = [dict(item or {}) for item in (wb.entries or [])]
+    for index, entry in enumerate(entries):
+        if int(entry.get("uid", -1)) != int(entry_uid):
+            continue
+        current = canonicalize_attachment(entry.get("output_contract"), entry)
+        if definition is not None:
+            current = apply_manual_definition(entry, definition, existing=current)
+        if enabled is not None:
+            current = set_attachment_enabled(entry, current, enabled)
+        entry["output_contract"] = current
+        entries[index] = entry
+        wb.entries = entries
+        db.add(wb)
+        await db.commit()
+        await db.refresh(wb)
+        return wb
+    raise NotFoundException("世界书条目不存在")
+
+
+async def confirm_entry_output_contract(
+    db: AsyncSession,
+    worldbook_id: UUID,
+    user_id: UUID,
+    entry_uid: int,
+) -> Worldbook:
+    """把单条 entry 现有的识别结果标记为“用户已确认”（reviewed=true），提升其权威性。
+
+    只改 reviewed 标记，不改契约内容——区别于 declare（用户重新声明模板）。
+    """
+    wb = await get_worldbook(db, worldbook_id, user_id)
+    if wb is None:
+        raise NotFoundException("世界书不存在")
+    if wb.user_id is None:
+        raise ForbiddenException("系统模板世界书不可编辑")
+
+    entries = [dict(e or {}) for e in (wb.entries or [])]
+    for idx, entry in enumerate(entries):
+        if int(entry.get("uid", -1)) == int(entry_uid):
+            raw_attachment = entry.get("output_contract")
+            if not isinstance(raw_attachment, dict):
+                raise NotFoundException("该条目尚无输出契约可确认")
+            entry["output_contract"] = mark_attachment_reviewed(entry, raw_attachment)
+            entries[idx] = entry
+            wb.entries = entries
+            db.add(wb)
+            await db.commit()
+            await db.refresh(wb)
+            return wb
+
+    raise NotFoundException("世界书条目不存在")
+
+
+async def restore_entry_output_contract_auto_definition(
+    db: AsyncSession,
+    worldbook_id: UUID,
+    user_id: UUID,
+    entry_uid: int,
+) -> Worldbook:
+    """放弃人工定义，恢复最近一次自动识别候选。"""
+    wb = await get_worldbook(db, worldbook_id, user_id)
+    if wb is None:
+        raise NotFoundException("世界书不存在")
+    if wb.user_id is None:
+        raise ForbiddenException("系统模板世界书不可编辑")
+
+    entries = [dict(item or {}) for item in (wb.entries or [])]
+    for index, entry in enumerate(entries):
+        if int(entry.get("uid", -1)) != int(entry_uid):
+            continue
+        raw_attachment = entry.get("output_contract")
+        if not isinstance(raw_attachment, dict):
+            raise NotFoundException("该条目尚无自动识别候选")
+        try:
+            entry["output_contract"] = accept_latest_auto_definition(
+                entry, raw_attachment, reviewed=False
+            )
+        except ValueError as exc:
+            raise NotFoundException(str(exc)) from exc
+        entries[index] = entry
+        wb.entries = entries
+        db.add(wb)
+        await db.commit()
+        await db.refresh(wb)
+        return wb
     raise NotFoundException("世界书条目不存在")
 
 

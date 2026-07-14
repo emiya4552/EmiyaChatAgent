@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -14,6 +13,14 @@ from typing import Any
 
 from app.services.llm_service import call_deepseek_non_stream
 from app.services.mvu_runtime.worldbook import is_mvu_tagged_entry
+from app.services.output_contracts.attachment import (
+    apply_manual_definition,
+    attachment_is_stale,
+    canonicalize_attachment,
+    canonicalize_proposal,
+)
+from app.services.output_contracts.hashing import content_hash
+from app.services.output_contracts.sections import get_canonical
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +59,6 @@ _FORMAT_HINTS = (
 )
 
 
-def content_hash(content: str) -> str:
-    """计算 entry.content 的稳定 hash。"""
-    digest = hashlib.sha256((content or "").encode("utf-8")).hexdigest()
-    return f"sha256:{digest}"
-
-
 def _strip_tags(text: str) -> str:
     return _TAG_STRIP_RE.sub("", text or "").strip()
 
@@ -67,6 +68,47 @@ def _entry_order(entry: dict) -> int:
         return int(entry.get("order", 100) or 100)
     except (TypeError, ValueError):
         return 100
+
+
+def _log_entry_contract(
+    entry: dict,
+    contract: dict[str, Any],
+    *,
+    phase: str,
+) -> None:
+    """记录 entry 的最终识别结果，不输出世界书原文。"""
+    definition = contract.get("definition") if isinstance(contract.get("definition"), dict) else {}
+    provenance = contract.get("provenance") if isinstance(contract.get("provenance"), dict) else {}
+    lifecycle = contract.get("lifecycle") if isinstance(contract.get("lifecycle"), dict) else {}
+    try:
+        definition_text = json.dumps(
+            definition,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+    except (TypeError, ValueError):
+        definition_text = repr(definition)
+
+    if len(definition_text) > 4000:
+        definition_text = f"{definition_text[:4000]}...(truncated)"
+
+    logger.info(
+        "[输出契约识别] phase=%s uid=%s comment=%r kind=%s enabled=%s "
+        "status=%s reviewed=%s source=%s trigger=%s confidence=%.2f reason=%r definition=%s",
+        phase,
+        entry.get("uid"),
+        str(entry.get("comment") or "")[:120],
+        definition.get("document_kind"),
+        contract.get("enabled", True),
+        lifecycle.get("status"),
+        lifecycle.get("reviewed", False),
+        provenance.get("source"),
+        provenance.get("trigger"),
+        float(provenance.get("confidence") or 0),
+        provenance.get("reason"),
+        definition_text,
+    )
 
 
 def _base_contract(
@@ -158,7 +200,7 @@ def _tail_abstract(
     }
 
 
-def detect_entry_heuristic(entry: dict) -> dict[str, Any]:
+def _detect_entry_heuristic_proposal(entry: dict) -> dict[str, Any]:
     """用高置信度规则识别单条 entry 的输出契约。"""
     if not isinstance(entry, dict):
         return _unknown_contract({}, "entry 非对象")
@@ -280,8 +322,8 @@ def _is_llm_candidate(entry: dict) -> bool:
     comment = str(entry.get("comment") or "")
     if not content.strip() or is_mvu_tagged_entry(entry):
         return False
-    oc = entry.get("output_contract") or {}
-    if oc.get("status") == "detected":
+    attachment = canonicalize_attachment(entry.get("output_contract"), entry)
+    if attachment.get("lifecycle", {}).get("status") == "active":
         return True
     text = f"{comment}\n{content}"
     return (
@@ -325,6 +367,9 @@ def _normalise_llm_contract(
     if not isinstance(confidence, (int, float)):
         confidence = 0.0
     confidence = max(0.0, min(1.0, float(confidence)))
+    # 只产 LLM proposal；section 的 canonical 规范化（中文 name→英文、乱 marker→标准
+    # marker）由下游 attachment.canonicalize_proposal → canonicalize_sections 统一完成
+    # （ADR-2a 逻辑已收敛到 v2 Attachment 层），此处不再重复规范化。
     abstract = data.get("abstract")
     if not isinstance(abstract, dict):
         abstract = None
@@ -342,7 +387,7 @@ def _normalise_llm_contract(
     )
 
 
-async def detect_entry_llm(entry: dict, *, trigger: str = "auto_import") -> dict[str, Any]:
+async def _detect_entry_llm_proposal(entry: dict, *, trigger: str = "auto_import") -> dict[str, Any]:
     """调用 LLM 识别单条 entry 的输出契约。失败时返回 unknown。"""
     content = str(entry.get("content") or "")
     comment = str(entry.get("comment") or "")
@@ -403,13 +448,24 @@ entry content:
         return _unknown_contract(entry, f"LLM 失败: {exc}", trigger=trigger)
 
 
+def detect_entry_heuristic(entry: dict) -> dict[str, Any]:
+    """用启发式生成 Proposal 并规范化为 v2 Attachment。"""
+    proposal = _detect_entry_heuristic_proposal(entry)
+    return canonicalize_proposal(entry, proposal, existing=entry.get("output_contract"))
+
+
+async def detect_entry_llm(entry: dict, *, trigger: str = "auto_import") -> dict[str, Any]:
+    """用 LLM 生成 Proposal 并规范化为 v2 Attachment。"""
+    proposal = await _detect_entry_llm_proposal(entry, trigger=trigger)
+    return canonicalize_proposal(entry, proposal, existing=entry.get("output_contract"))
+
+
 def _existing_contract_fresh(entry: dict) -> bool:
-    oc = entry.get("output_contract")
-    if not isinstance(oc, dict):
+    raw = entry.get("output_contract")
+    if not isinstance(raw, dict):
         return False
-    if oc.get("content_hash") != content_hash(str(entry.get("content") or "")):
-        return False
-    return oc.get("status") in {"detected", "none", "unknown", "manual"}
+    attachment = canonicalize_attachment(raw, entry)
+    return not attachment_is_stale(attachment, entry)
 
 
 async def annotate_entries(
@@ -422,10 +478,30 @@ async def annotate_entries(
     updated: list[dict] = []
     for raw in entries or []:
         entry = dict(raw or {})
-        if _existing_contract_fresh(entry):
+        raw_contract = entry.get("output_contract")
+        existing = canonicalize_attachment(raw_contract, entry) if isinstance(raw_contract, dict) else None
+        if existing is not None and not attachment_is_stale(existing, entry):
+            entry["output_contract"] = existing
+            _log_entry_contract(
+                entry,
+                existing,
+                phase="reuse",
+            )
             updated.append(entry)
             continue
-        entry["output_contract"] = detect_entry_heuristic(entry)
+        proposal = _detect_entry_heuristic_proposal(entry)
+        contract = canonicalize_proposal(
+            entry,
+            proposal,
+            existing=existing,
+            preserve_reviewed=bool(existing and existing.get("lifecycle", {}).get("reviewed")),
+        )
+        entry["output_contract"] = contract
+        _log_entry_contract(
+            entry,
+            contract,
+            phase="manual_override_preserved" if existing and existing.get("lifecycle", {}).get("reviewed") else "heuristic",
+        )
         updated.append(entry)
 
     if not llm_enabled or llm_limit <= 0:
@@ -436,12 +512,105 @@ async def annotate_entries(
         if _is_llm_candidate(entry)
     ][:llm_limit]
     for idx in candidate_indexes:
-        updated[idx]["output_contract"] = await detect_entry_llm(updated[idx])
+        entry = updated[idx]
+        existing = canonicalize_attachment(entry.get("output_contract"), entry)
+        proposal = await _detect_entry_llm_proposal(entry)
+        contract = canonicalize_proposal(
+            entry,
+            proposal,
+            existing=existing,
+            preserve_reviewed=bool(existing.get("lifecycle", {}).get("reviewed")),
+        )
+        updated[idx]["output_contract"] = contract
+        _log_entry_contract(updated[idx], contract, phase="llm")
     return updated
 
 
 async def detect_single_entry(entry: dict) -> dict:
     """用户主动触发单条 entry AI 识别。"""
     updated = dict(entry or {})
-    updated["output_contract"] = await detect_entry_llm(updated, trigger="manual")
+    existing = canonicalize_attachment(updated.get("output_contract"), updated) if isinstance(updated.get("output_contract"), dict) else None
+    proposal = await _detect_entry_llm_proposal(updated, trigger="manual")
+    contract = canonicalize_proposal(
+        updated,
+        proposal,
+        existing=existing,
+        preserve_reviewed=bool(existing and existing.get("lifecycle", {}).get("reviewed")),
+    )
+    updated["output_contract"] = contract
+    _log_entry_contract(updated, contract, phase="manual_llm")
     return updated
+
+
+def build_manual_contract(
+    entry: dict,
+    *,
+    mode: str = "full_document",
+    section_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """用户显式声明的输出模板 → source=manual、reviewed=true 契约（ADR-2b）。
+
+    与识别（推断）相反：这是用户在编辑器里直接声明的结果，权威性最高
+    （compiler._authority_key 里 reviewed / source=manual 为 level 4），运行时优先于
+    任何启发式 / LLM 识别。支持三种 `mode`：
+    - `full_document`：勾选 canonical section 组成整篇结构；
+    - `append_tail`（ADR-2e）：声明本 entry.content 为尾部模板，marker / span_hint 从
+      原文确定性提取（复用启发式 `_marker_from_entry` / `_tail_abstract`），运行时在回复
+      尾部续写；
+    - `none` 或空 full_document 选择：记为“用户声明无模板”（status=none，运行时不激活，
+      且 _existing_contract_fresh 视为新鲜，不再被自动重识别覆盖）。
+    """
+    if mode == "append_tail":
+        marker = _marker_from_entry(entry)
+        abstract = _tail_abstract(
+            entry,
+            marker,
+            span_hint={
+                "start_marker": "<details",
+                "summary_text": marker,
+                "end_marker": "</summary>",
+            },
+        )
+        return apply_manual_definition(
+            entry,
+            {
+                "document_kind": "tail_html",
+                **abstract,
+            },
+            existing=entry.get("output_contract"),
+        )
+
+    names = [n for n in (section_names or []) if get_canonical(n) is not None]
+    if mode != "full_document" or not names:
+        return apply_manual_definition(
+            entry,
+            {"document_kind": "none", "sections": []},
+            existing=entry.get("output_contract"),
+        )
+
+    sections = []
+    seen: set[str] = set()
+    for name in names:
+        cs = get_canonical(name)
+        if cs.name in seen:
+            continue
+        seen.add(cs.name)
+        sections.append({
+            "name": cs.name,
+            "marker": cs.marker,
+            "required": True,
+            "order": cs.order,
+        })
+    abstract = {
+        "placement": "full_document",
+        "once_per_reply": True,
+        "markers": [],
+        "sections": sections,
+        "variables": [],
+        "template_span_hint": {},
+    }
+    return apply_manual_definition(
+        entry,
+        {"document_kind": "full_document", **abstract},
+        existing=entry.get("output_contract"),
+    )

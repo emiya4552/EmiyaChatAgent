@@ -1,14 +1,5 @@
 # -*- coding: utf-8 -*-
-"""编译运行时契约（ADR-1e）。
-
-把 extractor 产出的基础契约编译成受控契约：为每个 section 填充 `kind`、
-`span_strategy`、`content_policy`、`repair_policy`。识别期（detector）已给出的
-`kind` 优先；缺失时用确定性 `name → kind` 映射后备，映射不出的 section 归
-`narrative` 并走 per-section 降级（`repair_policy=diagnose_only`）。
-
-compiler 不调用 LLM，只做确定性映射与编译，保持“运行时不做模板发现”原则。
-多候选权威性选主与冲突检测将在后续子步骤接入，当前沿用 extractor 的合并结果。
-"""
+"""编译 v2 Output Contract Attachment 为单轮运行时契约。"""
 from __future__ import annotations
 
 import dataclasses
@@ -17,21 +8,13 @@ from app.services.output_contracts.extractor import (
     build_visible_output_contract,
     iter_contract_candidates,
 )
+from app.services.output_contracts.render_profiles import get_render_profile
 from app.services.output_contracts.types import (
     SectionContract,
     SectionKind,
     SpanStrategy,
     VisibleOutputContract,
 )
-
-# 过渡期 name → kind 确定性映射（与 ADR-1d validator 的按 name 硬编码对齐）。
-_NAME_TO_KIND = {
-    "chapter": SectionKind.MARKDOWN_HEADING,
-    "body": SectionKind.NARRATIVE,
-    "options": SectionKind.CHOICE_SET,
-    "backend_log": SectionKind.DETAILS_SUMMARY,
-    "hidden_plot": SectionKind.DETAILS_SUMMARY,
-}
 
 # kind → 默认 span_strategy（能否安全提取/移动）。
 _KIND_TO_SPAN = {
@@ -65,22 +48,17 @@ _KIND_REPAIR_POLICY = {
 
 
 def _resolve_kind(section: SectionContract) -> str:
-    # 识别期已给出非默认 kind 时优先采用。
-    if section.kind and section.kind != SectionKind.NARRATIVE:
-        return section.kind
-    mapped = _NAME_TO_KIND.get(section.name)
-    if mapped:
-        return mapped
-    # body 本就是叙事；其余映射不出的自定义区块也归 narrative → diagnose_only 降级。
-    return SectionKind.NARRATIVE
+    return section.kind if section.kind in _KIND_TO_SPAN else SectionKind.NARRATIVE
 
 
-def _compile_section(section: SectionContract) -> SectionContract:
+def _compile_section(section: SectionContract, *, render_profile: str | None = None) -> SectionContract:
     kind = _resolve_kind(section)
-    span = _KIND_TO_SPAN.get(kind, SpanStrategy.NONE)
-    content_policy, min_items = _KIND_CONTENT_POLICY.get(kind, ("allow_empty", 0))
-    repair_policy = _KIND_REPAIR_POLICY.get(kind, "diagnose_only")
-    return dataclasses.replace(
+    span = section.span_strategy if section.span_strategy in _KIND_TO_SPAN.values() else _KIND_TO_SPAN.get(kind, SpanStrategy.NONE)
+    default_policy, default_min_items = _KIND_CONTENT_POLICY.get(kind, ("allow_empty", 0))
+    content_policy = section.content_policy if section.content_policy in {"allow_empty", "non_empty"} else default_policy
+    min_items = section.min_items if section.min_items >= 0 else default_min_items
+    repair_policy = section.repair_policy if section.repair_policy in {"deterministic", "fill_slot", "rewrite_slot", "diagnose_only"} else _KIND_REPAIR_POLICY.get(kind, "diagnose_only")
+    compiled = dataclasses.replace(
         section,
         kind=kind,
         span_strategy=span,
@@ -88,6 +66,10 @@ def _compile_section(section: SectionContract) -> SectionContract:
         min_items=min_items,
         repair_policy=repair_policy,
     )
+    profile = get_render_profile(render_profile)
+    if not profile.supports(kind=compiled.kind, span_strategy=compiled.span_strategy):
+        return dataclasses.replace(compiled, repair_policy="diagnose_only")
+    return compiled
 
 
 # ── 多候选权威性选主与冲突检测（ADR-1e §多候选合并与冲突）────────────
@@ -100,9 +82,11 @@ def _authority_key(candidate: dict) -> tuple:
     优先级：reviewed/manual > trigger=manual > 自动 LLM > 启发式 > entry order > confidence。
     """
     oc = candidate.get("oc") or {}
-    source = str(oc.get("source") or "")
-    trigger = str(oc.get("trigger") or "")
-    reviewed = bool(oc.get("reviewed"))
+    provenance = oc.get("provenance") if isinstance(oc.get("provenance"), dict) else {}
+    lifecycle = oc.get("lifecycle") if isinstance(oc.get("lifecycle"), dict) else {}
+    source = str(provenance.get("source") or "")
+    trigger = str(provenance.get("trigger") or "")
+    reviewed = bool(lifecycle.get("reviewed"))
     if reviewed or source == "manual":
         level = 4
     elif trigger == "manual":
@@ -113,7 +97,7 @@ def _authority_key(candidate: dict) -> tuple:
         level = 1
     else:
         level = 0
-    confidence = float(oc.get("confidence") or 0.0)
+    confidence = float(provenance.get("confidence") or 0.0)
     return (level, candidate.get("order", 100), confidence)
 
 
@@ -167,6 +151,8 @@ def _merge_sections(
 def compile_contract(
     wi_activated: list[dict] | None,
     chat_config: dict | None = None,
+    *,
+    require_confirmed: bool = False,
 ) -> VisibleOutputContract:
     """从激活条目编译受控运行时契约。
 
@@ -175,11 +161,13 @@ def compile_contract(
     整篇顺序（inline 候选并入），而不是把多份 full_document sections 直接堆叠。
     compiler 不调用 LLM，只做确定性映射与编译。
     """
-    base = build_visible_output_contract(wi_activated, chat_config)
+    base = build_visible_output_contract(
+        wi_activated, chat_config, require_confirmed=require_confirmed
+    )
     if not base.required_sections:
         return base
 
-    candidates = iter_contract_candidates(wi_activated)
+    candidates = iter_contract_candidates(wi_activated, require_confirmed=require_confirmed)
     fd_candidates = [c for c in candidates if c["kind"] == "full_document"]
 
     sections = base.required_sections
@@ -192,5 +180,17 @@ def compile_contract(
         ]
         sections = _merge_sections(main["sections"], inline_sections)
 
-    compiled = [_compile_section(s) for s in sections]
+    profile_by_source = {
+        (candidate["source"].uid, candidate["source"].comment): candidate.get("render_profile")
+        for candidate in candidates
+    }
+    compiled = [
+        _compile_section(
+            section,
+            render_profile=profile_by_source.get(
+                (section.source.uid, section.source.comment) if section.source else (None, "")
+            ),
+        )
+        for section in sections
+    ]
     return dataclasses.replace(base, required_sections=compiled, conflicts=conflicts)

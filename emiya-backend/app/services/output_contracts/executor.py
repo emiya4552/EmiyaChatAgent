@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.services.output_contracts.reconstructor import reconstruct
@@ -37,7 +38,7 @@ class EnforcementResult:
     display_content: str
     outcome: str          # passed / failed / conflict / disabled
     coverage: str         # full / partial / none
-    method: str           # initial / reconstructed / slot_completed / rewritten / fallback
+    method: str           # initial / reconstructed / slot_completed / rewritten / strict_rendered
     requested_mode: str
     effective_mode: str
     diagnostics: dict[str, Any] = field(default_factory=dict)
@@ -91,6 +92,7 @@ async def enforce_visible_output_contract(
     contract: VisibleOutputContract,
     messages: list[dict] | None = None,
     policy: dict | None = None,
+    tail_continuation: Callable[[str], Awaitable[str]] | None = None,
 ) -> EnforcementResult:
     """执行可见输出契约，返回最终两个视图与诊断。
 
@@ -202,14 +204,30 @@ async def enforce_visible_output_contract(
             diagnostics=_diag_dict(initial, initial, contract),
         )
 
-    # repair：① 确定性修复 → ② 缺失槽位补写 → ③ 整篇 rewrite 兜底。
+    # repair：① 流式尾部续写 → ② 确定性修复 → ③ 缺失槽位补写 → ④ 整篇 rewrite。
     # 三步同时作用于 content 与 display_content 两个视图，逐步复校。
     started = time.monotonic()
     extra_calls = 0
-    new_display, disp_actions = reconstruct(display_content, contract)
-    new_content, _ = reconstruct(content, contract)
-    actions = list(disp_actions)
-    method = "reconstructed" if disp_actions else "initial"
+    new_content = content
+    new_display = display_content
+    actions: list[dict[str, Any]] = []
+    method = "initial"
+
+    # 流式层只提供 continuation 回调；缺失判定、复校和诊断归执行器统一负责。
+    if tail_continuation is not None and contract.required_tail_blocks and initial.missing:
+        continued = await tail_continuation(new_display)
+        if continued != new_display:
+            new_display = continued
+            new_content = continued
+            actions.append({"action": "tail_continuation"})
+            extra_calls += 1
+            method = "continuation"
+
+    new_display, disp_actions = reconstruct(new_display, contract)
+    new_content, _ = reconstruct(new_content, contract)
+    actions.extend(disp_actions)
+    if disp_actions and method == "initial":
+        method = "reconstructed"
 
     final = validate_visible_output(new_display, contract)
 

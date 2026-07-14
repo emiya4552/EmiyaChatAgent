@@ -1012,11 +1012,20 @@ async def node_post_process(state: ChatState) -> dict:
                     compile_contract,
                     enforce_visible_output_contract,
                     resolve_policy,
+                    resolve_require_confirmed,
                 )
 
-                _oc = compile_contract(state.get("wi_activated"))
+                _oc_cfg = state.get("output_contract_config") or {}
+                # ADR-2c：full_document 执行只采用已确认契约（严格模式）；锚定路径
+                # （node_build_prompt）不传该参数，草稿仍进 Prompt 引导模型。
+                _oc_require_confirmed = resolve_require_confirmed(
+                    account_defaults=_oc_cfg.get("account_defaults"),
+                    conversation_overrides=_oc_cfg.get("overrides"),
+                )
+                _oc = compile_contract(
+                    state.get("wi_activated"), require_confirmed=_oc_require_confirmed
+                )
                 if _oc.required_sections:
-                    _oc_cfg = state.get("output_contract_config") or {}
                     _oc_policy = resolve_policy(
                         _oc,
                         account_defaults=_oc_cfg.get("account_defaults"),

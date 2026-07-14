@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     WORLDBOOK_TAIL_CONTINUATION_MAX: int = 3  # 每轮最多续写 K 个模板
     WORLDBOOK_TAIL_CONTINUATION_MAX_TOKENS: int = 800  # 单次续写 max_tokens
 
+    # 可见输出契约「严格声明模式」（ADR-2c，**默认关**）：on 时聊天运行时只**执行**
+    # 已确认 / 声明的契约（reviewed=true 或 source=manual），未确认的自动识别草稿降为
+    # 仅 Prompt 引导（仍锚定，不做校验后修复 / 续写 / strict）。默认关＝草稿照旧生效、
+    # 开箱即用。也可由对话 chat_config.output_contract_require_confirmed 覆盖。
+    OUTPUT_CONTRACT_REQUIRE_CONFIRMED: bool = False
+
     # MVU double-ai update pass (ADR-0007): the main model writes narrative only,
     # then a second non-streaming tool call emits JSON Patch ops for stat_data.
     # Empty model means reuse DEEPSEEK_MODEL.
@@ -140,6 +146,18 @@ class Settings(BaseSettings):
     # PUT /mvu-state UP 回传持久化。浏览器成为 MVU 状态唯一权威。
     # 默认关：后端照旧 apply（前端 UP 覆盖），保住无浏览器/关页时的兜底。前端运行时稳后再开。
     MVU_RETIRE_BACKEND_APPLY: bool = False
+
+    # === 日志分文件（app/logging_setup.py）===
+    # 按类别把业务日志分流到 LOG_DIR 下不同文件（prompt.log / output_contract.log /
+    # app.log 兜底）。只读现有 logger 名 + 消息前缀，不改任何业务 log；控制台照旧全量。
+    LOG_SPLIT_ENABLED: bool = True
+    LOG_DIR: str = "logs"
+    # 控制台聚焦：all=全量（默认）/ prompt / contract。聚焦时控制台只留该类 + 通用，
+    # 压下其它噪音；文件分流（prompt.log / output_contract.log / app.log）始终不受影响。
+    LOG_FOCUS: str = "all"
+    # 每次启动清空旧日志（截断主文件 + 删 rotation 备份），便于每次只看本次运行；
+    # 设 false 则跨运行追加累积。
+    LOG_RESET_ON_START: bool = True
 
     model_config = {
         "env_file": ".env",

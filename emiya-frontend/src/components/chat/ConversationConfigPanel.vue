@@ -329,6 +329,17 @@
             />
             <span class="switch-hint">strict 不可用或预算不足时的降级模式。</span>
           </n-form-item>
+          <n-form-item label="严格声明模式" label-placement="left">
+            <n-select
+              v-model:value="ocRequireConfirmedControl"
+              :options="ocRequireConfirmedOptions"
+              style="width: 160px"
+            />
+            <span class="switch-hint">
+              ADR-2c：开启后本对话只执行已确认 / 声明的契约，未确认的自动识别草稿仅作
+              Prompt 引导（不做校验后修复 / 续写 / strict）。默认继承（全局默认关，开箱即用）。
+            </span>
+          </n-form-item>
           <div v-if="lastContractDiag" class="oc-last-round">
             <strong>上轮结构结果：</strong>
             <span>{{ lastContractSummary }}</span>
@@ -722,6 +733,11 @@ const ocFallbackOptions = [
   { label: 'guide', value: 'guide' },
   { label: 'off', value: 'off' },
 ]
+const ocRequireConfirmedOptions = [
+  { label: '继承', value: 'inherit' },
+  { label: '开启', value: 'yes' },
+  { label: '关闭', value: 'no' },
+]
 const ocModeControl = computed<string>({
   get: () => localConfig.value.output_contract_mode ?? 'inherit',
   set: (s) => { localConfig.value.output_contract_mode = s === 'inherit' ? null : s },
@@ -737,6 +753,17 @@ const ocRewriteControl = computed<string>({
   },
   set: (s) => {
     localConfig.value.output_contract_allow_full_rewrite =
+      s === 'yes' ? true : s === 'no' ? false : null
+  },
+})
+// ADR-2f 前端开关（机制见 ADR-2c 严格声明模式）：yes=只执行已确认/声明契约，no=草稿照旧生效，inherit=全局默认。
+const ocRequireConfirmedControl = computed<string>({
+  get: () => {
+    const v = localConfig.value.output_contract_require_confirmed
+    return v === true ? 'yes' : v === false ? 'no' : 'inherit'
+  },
+  set: (s) => {
+    localConfig.value.output_contract_require_confirmed =
       s === 'yes' ? true : s === 'no' ? false : null
   },
 })

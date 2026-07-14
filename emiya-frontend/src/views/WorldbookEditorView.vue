@@ -49,7 +49,17 @@
             :entry="selectedEntry"
             :book-defaults="bookDefaults"
             :detecting-output-contract="detectingOutputContract"
+            :declaring-output-contract="declaringOutputContract"
+            :confirming-output-contract="confirmingOutputContract"
+            :updating-output-contract="updatingOutputContract"
+            :restoring-output-contract="restoringOutputContract"
+            :canonical-sections="canonicalSections"
             @detect-output-contract="detectSelectedEntryOutputContract"
+            @declare-output-contract="declareSelectedEntryOutputContract"
+            @save-output-contract-definition="saveSelectedEntryOutputContractDefinition"
+            @confirm-output-contract="confirmSelectedEntryOutputContract"
+            @update-output-contract="updateSelectedEntryOutputContract"
+            @restore-auto-output-contract="restoreSelectedEntryOutputContractAuto"
           />
         </div>
       </div>
@@ -84,9 +94,15 @@ import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
 import WorldbookEntryEditor from '../components/worldbook/WorldbookEntryEditor.vue'
 import {
+  confirmWorldbookEntryOutputContract,
+  declareWorldbookEntryOutputContract,
   detectWorldbookEntryOutputContract,
+  fetchCanonicalSections,
   fetchWorldbook,
   updateWorldbook,
+  updateWorldbookEntryOutputContract,
+  restoreWorldbookEntryOutputContractAuto,
+  type CanonicalSection,
 } from '../api/worldbook'
 import type { Worldbook, WorldbookEntry } from '../types'
 
@@ -98,6 +114,11 @@ const id = route.params.id as string
 const loading = ref(true)
 const saving = ref(false)
 const detectingOutputContract = ref(false)
+const declaringOutputContract = ref(false)
+const confirmingOutputContract = ref(false)
+const updatingOutputContract = ref(false)
+const restoringOutputContract = ref(false)
+const canonicalSections = ref<CanonicalSection[]>([])
 const metaDialog = ref(false)
 const selectedIdx = ref<number>(-1)
 const book = ref<Worldbook>({
@@ -135,6 +156,12 @@ onMounted(async () => {
     router.push('/worldbooks')
   } finally {
     loading.value = false
+  }
+  // canonical section 列表用于“显式声明输出模板”；失败不阻断编辑（声明区隐藏）。
+  try {
+    canonicalSections.value = await fetchCanonicalSections()
+  } catch {
+    canonicalSections.value = []
   }
 })
 
@@ -227,6 +254,100 @@ async function detectSelectedEntryOutputContract() {
     message.error(err.response?.data?.detail || '识别失败')
   } finally {
     detectingOutputContract.value = false
+  }
+}
+
+async function declareSelectedEntryOutputContract(
+  payload: { mode: string; section_names: string[] },
+) {
+  const entry = selectedEntry.value
+  if (!entry) return
+  declaringOutputContract.value = true
+  try {
+    await saveBookSilently()
+    const updated = await declareWorldbookEntryOutputContract(id, entry.uid, payload)
+    book.value = updated
+    const idx = book.value.entries.findIndex(e => e.uid === entry.uid)
+    if (idx >= 0) selectedIdx.value = idx
+    message.success('输出模板已声明（source=manual，最高权威）')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '声明失败')
+  } finally {
+    declaringOutputContract.value = false
+  }
+}
+
+async function saveSelectedEntryOutputContractDefinition(
+  payload: { definition: Record<string, unknown> },
+) {
+  const entry = selectedEntry.value
+  if (!entry) return
+  declaringOutputContract.value = true
+  try {
+    await saveBookSilently()
+    const updated = await updateWorldbookEntryOutputContract(id, entry.uid, payload)
+    book.value = updated
+    const idx = book.value.entries.findIndex(e => e.uid === entry.uid)
+    if (idx >= 0) selectedIdx.value = idx
+    message.success('输出契约定义已保存')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '保存契约定义失败')
+  } finally {
+    declaringOutputContract.value = false
+  }
+}
+
+async function confirmSelectedEntryOutputContract() {
+  const entry = selectedEntry.value
+  if (!entry) return
+  confirmingOutputContract.value = true
+  try {
+    await saveBookSilently()
+    const updated = await confirmWorldbookEntryOutputContract(id, entry.uid)
+    book.value = updated
+    const idx = book.value.entries.findIndex(e => e.uid === entry.uid)
+    if (idx >= 0) selectedIdx.value = idx
+    message.success('已确认识别结果（reviewed=true）')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '确认失败')
+  } finally {
+    confirmingOutputContract.value = false
+  }
+}
+
+async function updateSelectedEntryOutputContract(payload: { enabled: boolean }) {
+  const entry = selectedEntry.value
+  if (!entry) return
+  updatingOutputContract.value = true
+  try {
+    await saveBookSilently()
+    const updated = await updateWorldbookEntryOutputContract(id, entry.uid, payload)
+    book.value = updated
+    const idx = book.value.entries.findIndex(e => e.uid === entry.uid)
+    if (idx >= 0) selectedIdx.value = idx
+    message.success(payload.enabled ? '输出契约已启用' : '输出契约已禁用')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '更新契约失败')
+  } finally {
+    updatingOutputContract.value = false
+  }
+}
+
+async function restoreSelectedEntryOutputContractAuto() {
+  const entry = selectedEntry.value
+  if (!entry) return
+  restoringOutputContract.value = true
+  try {
+    await saveBookSilently()
+    const updated = await restoreWorldbookEntryOutputContractAuto(id, entry.uid)
+    book.value = updated
+    const idx = book.value.entries.findIndex(e => e.uid === entry.uid)
+    if (idx >= 0) selectedIdx.value = idx
+    message.success('已恢复自动识别候选')
+  } catch (err: any) {
+    message.error(err.response?.data?.detail || '恢复自动候选失败')
+  } finally {
+    restoringOutputContract.value = false
   }
 }
 </script>

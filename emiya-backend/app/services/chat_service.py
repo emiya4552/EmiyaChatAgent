@@ -2,7 +2,6 @@
 """聊天业务逻辑 — 分析 graph + 真流式回复生成。"""
 import json
 import logging
-from dataclasses import replace
 from typing import AsyncGenerator
 from uuid import UUID
 
@@ -21,12 +20,12 @@ from app.services.langgraph.state import ChatState
 from app.services.llm_service import call_deepseek_stream
 from app.services.output_contracts import (
     build_contract_sse,
-    build_visible_output_contract,
     compile_contract,
     continue_missing_tail_blocks,
+    enforce_visible_output_contract,
     resolve_policy,
+    resolve_require_confirmed,
     strict_available,
-    validate_visible_output,
 )
 from app.services.prompt_renderer import DEFAULT_TEMPLATE_BLOCKS
 from app.services.token_budget import resolve_reply_max_tokens
@@ -126,8 +125,17 @@ async def process_chat(
             "output_contract_strict_fallback": _conv_cfg.get(
                 "output_contract_strict_fallback"
             ),
+            # ADR-2c 严格声明模式（对话级覆盖；账户级暂由全局 settings 兜底）。
+            "output_contract_require_confirmed": _conv_cfg.get(
+                "output_contract_require_confirmed"
+            ),
         },
     }
+    # ADR-2c：严格模式只影响契约**执行**（未确认草稿不强制），不影响 Prompt 锚定。
+    _require_confirmed = resolve_require_confirmed(
+        account_defaults=output_contract_config["account_defaults"],
+        conversation_overrides=output_contract_config["overrides"],
+    )
 
     # 3. 构建初始 state
     graph = build_analysis_graph()
@@ -244,7 +252,9 @@ async def process_chat(
     # ADR-1g：strict 模式在生成前判定。可用时草稿不作为 message_delta 流式下发（改发
     # contract_stage 阶段事件），最终由 node_post_process 的确定性渲染经 message_done 一次
     # 性提交。strict 永不自动开启——只有账户/对话显式设为 strict 且启用前提满足才为真。
-    _strict_contract = compile_contract(final_state.get("wi_activated"))
+    _strict_contract = compile_contract(
+        final_state.get("wi_activated"), require_confirmed=_require_confirmed
+    )
     strict_active = False
     if _strict_contract.required_sections:
         _strict_policy = resolve_policy(
@@ -360,79 +370,51 @@ async def process_chat(
         yield f"event: message_done\ndata: {json.dumps({'message_id': '', 'conversation_id': str(conversation_id), 'new_memories': 0}, ensure_ascii=False)}\n\n"
         return
 
-    # 5.5 可见输出契约诊断 + 尾部模板兜底。
-    # 先对原始回复做一次校验，续写后再校验一次；message_done 下发最终诊断。
+    # 5.5 尾部模板续写通过输出契约执行器统一处理。
     final_state["assistant_reply"] = "".join(buffer)
-    output_contract = build_visible_output_contract(
+    output_contract = compile_contract(
         final_state.get("wi_activated"),
         chat_config,
+        require_confirmed=_require_confirmed,
     )
-    output_contract_diag = validate_visible_output(
-        final_state["assistant_reply"],
-        output_contract,
-    )
-    # 保留初次校验，供 message_done 的稳定诊断结构（ADR-1f）区分 initial / final。
-    tail_initial_diag = output_contract_diag
-    tail_method = "initial"
-    tail_extra_calls = 0
-
-    # ADR-1f：tail 契约的执行模式（auto → repair）。off 时连尾部续写也不做。
     _tail_policy = resolve_policy(
         output_contract,
         account_defaults=output_contract_config["account_defaults"],
         conversation_overrides=output_contract_config["overrides"],
     )
-    tail_execution_on = _tail_policy["mode"] != "off"
+    tail_deltas: list[str] = []
 
-    tail_repair_needed = bool(
-        output_contract.required_tail_blocks
-        and output_contract_diag.missing
-        and tail_execution_on
-    )
-
-    logger.info(
-        "[契约校验] mode=%s ok=%s required=%d missing=%d repair_needed=%s",
-        output_contract_diag.mode,
-        output_contract_diag.ok,
-        output_contract_diag.required,
-        len(output_contract_diag.missing),
-        tail_repair_needed,
-    )
-
-    # 把本次 tool_call 交给 node_post_process 走同一校验+应用核心
-    final_state["mvu_tool_calls"] = tool_calls_acc
-    if (
-        buffer
-        and output_contract.required_tail_blocks
-        and settings.WORLDBOOK_TAIL_CONTINUATION_ENABLED
-        and tail_execution_on
-    ):
+    async def _continue_tail(reply: str) -> str:
+        current = reply
         async for delta in continue_missing_tail_blocks(
-            reply=final_state["assistant_reply"],
+            reply=reply,
             contract=output_contract,
             messages=messages,
             conversation_id=conversation_id,
             chat_config=chat_config,
-            broadcast=_broadcast,
-            update_reply=lambda reply: final_state.__setitem__("assistant_reply", reply),
+            update_reply=lambda value: None,
         ):
-            yield delta
-        repaired_diag = validate_visible_output(
-            final_state["assistant_reply"],
-            output_contract,
-        )
-        tail_extra_calls = 1
-        if tail_repair_needed and repaired_diag.ok:
-            output_contract_diag = replace(
-                repaired_diag,
-                repaired=True,
-                repair_mode="continuation",
-            )
-            tail_method = "reconstructed"
-        else:
-            output_contract_diag = repaired_diag
-            if repaired_diag != tail_initial_diag:
-                tail_method = "reconstructed"
+            tail_deltas.append(delta)
+            try:
+                payload = json.loads(delta.split("data: ", 1)[1])
+                current += str(payload.get("content") or "")
+            except (IndexError, json.JSONDecodeError):
+                continue
+        return current
+
+    tail_result = await enforce_visible_output_contract(
+        content=final_state["assistant_reply"],
+        display_content=final_state["assistant_reply"],
+        contract=output_contract,
+        messages=messages,
+        policy=_tail_policy,
+        tail_continuation=(
+            _continue_tail if settings.WORLDBOOK_TAIL_CONTINUATION_ENABLED else None
+        ),
+    )
+    final_state["assistant_reply"] = tail_result.content
+    for delta in tail_deltas:
+        yield delta
 
     # 6. 保存回复 + 后处理（情绪记录、关系更新、记忆提取）
     if final_state.get("persona_uses_mvu") and (final_state.get("assistant_reply") or "").strip():
@@ -545,15 +527,18 @@ async def process_chat(
         msg_done_data["output_contract"] = build_contract_sse(
             contract=output_contract,
             contract_mode=output_contract.mode,
-            requested_mode=_tail_policy["requested_mode"],
-            effective_mode=_tail_policy["mode"],
-            outcome="passed" if output_contract_diag.ok else "failed",
-            coverage="full" if output_contract.required_tail_blocks else "none",
-            method=tail_method,
-            initial=tail_initial_diag,
-            final=output_contract_diag,
-            extra_calls=tail_extra_calls,
+            requested_mode=tail_result.requested_mode,
+            effective_mode=tail_result.effective_mode,
+            outcome=tail_result.outcome,
+            coverage=tail_result.coverage,
+            method=tail_result.method,
+            initial=None,
+            final=None,
+            actions=tail_result.actions,
+            latency_ms=tail_result.latency_ms,
+            extra_calls=tail_result.extra_calls,
         )
+        msg_done_data["output_contract"].update(tail_result.diagnostics)
     if post_result.get("output_contract"):
         msg_done_data["output_contract"] = post_result["output_contract"]
     if mvu_browser_sync is not None:

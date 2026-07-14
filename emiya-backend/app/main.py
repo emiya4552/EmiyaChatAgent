@@ -31,6 +31,18 @@ logging.getLogger("chromadb").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
+# 业务日志按类别分流到 LOG_DIR 下不同文件（prompt.log / output_contract.log /
+# app.log 兜底）；只读现有 logger 名 + 消息前缀，不改业务代码，控制台仍全量。
+# 分类标准与前缀表见 app/logging_setup.py。
+if settings.LOG_SPLIT_ENABLED:
+    from app.logging_setup import setup_split_logging
+
+    setup_split_logging(
+        log_dir=settings.LOG_DIR,
+        focus=settings.LOG_FOCUS,
+        reset=settings.LOG_RESET_ON_START,
+    )
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(

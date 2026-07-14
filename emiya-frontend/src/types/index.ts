@@ -189,6 +189,8 @@ export interface ChatConfig {
   output_contract_mode?: string | null
   output_contract_allow_full_rewrite?: boolean | null
   output_contract_strict_fallback?: string | null
+  // ADR-2c 严格声明模式覆盖；null/缺省 = 继承全局默认
+  output_contract_require_confirmed?: boolean | null
 }
 
 export interface TokenBudgetReport {
@@ -270,8 +272,51 @@ export interface WorldbookEntry {
   role: string              // system / user / assistant
   ignore_budget: boolean
   outlet_name: string | null
-  output_contract?: Record<string, any> | null
+  output_contract?: OutputContractAttachment | null
   extras?: Record<string, any>
+}
+
+export interface OutputContractSectionDefinition {
+  id: string
+  label: string
+  kind: string
+  marker: string
+  required: boolean
+  order: number
+  locator: Record<string, unknown>
+  content_policy: Record<string, unknown>
+  repair_policy: string
+  capability: string
+}
+
+export interface OutputContractAttachment {
+  schema_version: 2
+  enabled: boolean
+  definition: {
+    document_kind: string
+    placement: string
+    once_per_reply: boolean
+    sections: OutputContractSectionDefinition[]
+    markers: string[]
+    forbidden_terms: string[]
+    render_profile: string
+  }
+  provenance: {
+    source: string
+    trigger: string
+    confidence: number
+    reason: string
+    proposal?: { warnings?: string[] }
+  }
+  lifecycle: {
+    content_hash: string
+    detector_version: string
+    reviewed: boolean
+    status: 'active' | 'none' | 'unknown'
+  }
+  latest_auto_definition?: Record<string, unknown>
+  latest_auto_provenance?: Record<string, unknown>
+  is_stale?: boolean
 }
 
 export interface Worldbook {

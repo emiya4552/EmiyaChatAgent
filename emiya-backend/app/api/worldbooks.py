@@ -13,10 +13,18 @@ from app.database import get_db
 from app.models.user import User
 from app.models.worldbook import Worldbook
 from app.schemas.worldbook import (
+    CanonicalSectionItem,
+    OutputContractDeclareRequest,
+    OutputContractUpdateRequest,
     WorldbookCreateRequest,
     WorldbookListItem,
     WorldbookResponse,
     WorldbookUpdateRequest,
+)
+from app.services.output_contracts.sections import CANONICAL_SECTIONS
+from app.services.output_contracts.attachment import (
+    attachment_is_stale,
+    canonicalize_attachment,
 )
 from app.services.worldbook import service as wb_service
 from app.services.worldbook.import_export import (
@@ -31,6 +39,14 @@ router = APIRouter(prefix="/api/v1/worldbooks", tags=["世界书"])
 
 
 def _wb_to_response(wb: Worldbook) -> WorldbookResponse:
+    entries: list[dict] = []
+    for raw_entry in wb.entries or []:
+        entry = dict(raw_entry or {})
+        if isinstance(entry.get("output_contract"), dict):
+            attachment = canonicalize_attachment(entry["output_contract"], entry)
+            attachment["is_stale"] = attachment_is_stale(attachment, entry)
+            entry["output_contract"] = attachment
+        entries.append(entry)
     return WorldbookResponse(
         id=wb.id,
         user_id=wb.user_id,
@@ -39,7 +55,7 @@ def _wb_to_response(wb: Worldbook) -> WorldbookResponse:
         scan_depth=wb.scan_depth,
         case_sensitive=wb.case_sensitive,
         match_whole_words=wb.match_whole_words,
-        entries=wb.entries or [],
+        entries=entries,
         extensions=wb.extensions or {},
         created_at=wb.created_at,
         updated_at=wb.updated_at,
@@ -66,6 +82,27 @@ async def list_worldbooks(
 ):
     items = await wb_service.list_worldbooks(db, current_user.id)
     return [_wb_to_list_item(wb) for wb in items]
+
+
+@router.get(
+    "/output-contract/canonical-sections",
+    response_model=list[CanonicalSectionItem],
+)
+async def list_canonical_sections(
+    current_user: User = Depends(get_current_user),
+):
+    """列出可用于人工定义的受控 section。"""
+    _ = current_user
+    return [
+        CanonicalSectionItem(
+            name=section.name,
+            label=section.label or section.name,
+            kind=section.kind,
+            marker=section.marker,
+            order=section.order,
+        )
+        for section in CANONICAL_SECTIONS
+    ]
 
 
 @router.get("/{worldbook_id}", response_model=WorldbookResponse)
@@ -142,6 +179,92 @@ async def detect_entry_output_contract(
 ):
     """用户主动对单条世界书 entry 执行 AI 输出契约识别。"""
     wb = await wb_service.detect_worldbook_entry_output_contract(
+        db,
+        worldbook_id,
+        current_user.id,
+        entry_uid,
+    )
+    return _wb_to_response(wb)
+
+
+@router.put(
+    "/{worldbook_id}/entries/{entry_uid}/output-contract",
+    response_model=WorldbookResponse,
+)
+async def declare_entry_output_contract(
+    worldbook_id: UUID,
+    entry_uid: int,
+    data: OutputContractDeclareRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """用户显式声明单条 entry 的输出模板（source=manual, reviewed=true，ADR-2b）。"""
+    wb = await wb_service.declare_entry_output_contract(
+        db,
+        worldbook_id,
+        current_user.id,
+        entry_uid,
+        mode=data.mode,
+        section_names=data.section_names,
+    )
+    return _wb_to_response(wb)
+
+
+@router.patch(
+    "/{worldbook_id}/entries/{entry_uid}/output-contract",
+    response_model=WorldbookResponse,
+)
+async def update_entry_output_contract(
+    worldbook_id: UUID,
+    entry_uid: int,
+    data: OutputContractUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """编辑 definition，或仅开关当前 entry 的输出契约。"""
+    wb = await wb_service.update_entry_output_contract(
+        db,
+        worldbook_id,
+        current_user.id,
+        entry_uid,
+        definition=data.definition,
+        enabled=data.enabled,
+    )
+    return _wb_to_response(wb)
+
+
+@router.post(
+    "/{worldbook_id}/entries/{entry_uid}/confirm-output-contract",
+    response_model=WorldbookResponse,
+)
+async def confirm_entry_output_contract(
+    worldbook_id: UUID,
+    entry_uid: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """把单条 entry 的识别结果确认为 reviewed=true，提升其权威性（ADR-2b）。"""
+    wb = await wb_service.confirm_entry_output_contract(
+        db,
+        worldbook_id,
+        current_user.id,
+        entry_uid,
+    )
+    return _wb_to_response(wb)
+
+
+@router.post(
+    "/{worldbook_id}/entries/{entry_uid}/restore-auto-output-contract",
+    response_model=WorldbookResponse,
+)
+async def restore_entry_output_contract_auto_definition(
+    worldbook_id: UUID,
+    entry_uid: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """恢复被人工定义保留的最近一次自动识别候选。"""
+    wb = await wb_service.restore_entry_output_contract_auto_definition(
         db,
         worldbook_id,
         current_user.id,
