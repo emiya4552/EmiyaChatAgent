@@ -45,7 +45,7 @@ class WorldbookEntry(BaseModel):
     # outlet
     outlet_name: str | None = None
 
-    # 可见输出契约识别结果（详见 docs/feat-adr/adr1-1）
+    # 绑定在 entry 上的输出契约 Attachment；读取时兼容旧版平铺对象。
     output_contract: dict | None = None
 
     # 兜底字段
@@ -103,6 +103,39 @@ class WorldbookListItem(BaseModel):
     is_template: bool  # user_id is None
     created_at: datetime
     updated_at: datetime
+
+
+# ─── 输出契约声明 / canonical section（ADR-2b）───
+
+
+class CanonicalSectionItem(BaseModel):
+    """canonical section 注册表项，供前端“输出模板编辑器”列出可选区块。"""
+
+    name: str
+    label: str
+    kind: str
+    marker: str
+    order: int
+
+
+class OutputContractDeclareRequest(BaseModel):
+    """用户显式声明单条 entry 的输出模板（→ source=manual, reviewed=true）。"""
+
+    mode: str = Field("full_document", pattern="^(full_document|append_tail|none)$")
+    section_names: list[str] = Field(
+        default_factory=list, description="选中的 canonical section 有序列表（full_document 用）"
+    )
+
+
+class OutputContractUpdateRequest(BaseModel):
+    """更新 entry 的契约定义或启用状态。
+
+    definition 由后端 canonicalizer 收敛为受控 v2 schema；客户端不能直接写入
+    provenance 与 lifecycle，避免伪造识别来源或确认状态。
+    """
+
+    definition: dict | None = None
+    enabled: bool | None = None
 
 
 # ─── 对话上的世界书绑定 / AN 更新 ───

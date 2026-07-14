@@ -12,6 +12,7 @@ from app.services.output_contracts.diagnostics import (
 )
 from app.services.output_contracts.detector import (
     annotate_entries,
+    build_manual_contract,
     detect_entry_heuristic,
     detect_entry_llm,
     detect_single_entry,
@@ -21,8 +22,14 @@ from app.services.output_contracts.executor import (
     EnforcementResult,
     enforce_visible_output_contract,
 )
-from app.services.output_contracts.extractor import build_visible_output_contract
-from app.services.output_contracts.policy import resolve_policy
+from app.services.output_contracts.extractor import (
+    build_visible_output_contract,
+    is_confirmed,
+)
+from app.services.output_contracts.policy import (
+    resolve_policy,
+    resolve_require_confirmed,
+)
 from app.services.output_contracts.prompt import build_output_contract_prompt
 from app.services.output_contracts.reconstructor import reconstruct
 from app.services.output_contracts.renderer import (
@@ -75,6 +82,7 @@ __all__ = [
     "annotate_entries",
     "build_contract_sse",
     "split_rules",
+    "build_manual_contract",
     "detect_entry_heuristic",
     "detect_entry_llm",
     "detect_single_entry",
@@ -82,8 +90,10 @@ __all__ = [
     "enforce_visible_output_contract",
     "EnforcementResult",
     "find_missing_tail_blocks",
+    "is_confirmed",
     "reconstruct",
     "resolve_policy",
+    "resolve_require_confirmed",
     "render_choice_set",
     "render_details",
     "render_heading",

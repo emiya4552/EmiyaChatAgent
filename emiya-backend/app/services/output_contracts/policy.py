@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.config import settings
 from app.services.output_contracts.types import VisibleOutputContract
 
 # 聊天期执行模式全集。
@@ -28,6 +29,27 @@ def _pick(override: Any, account: Any, fallback: Any) -> Any:
     if account not in _INHERIT and account is not None:
         return account
     return fallback
+
+
+def resolve_require_confirmed(
+    *,
+    account_defaults: dict | None = None,
+    conversation_overrides: dict | None = None,
+) -> bool:
+    """解析「严格声明模式」开关（ADR-2c）：对话覆盖 > 账户默认 > 全局 settings 默认。
+
+    只影响契约的**执行**（未确认草稿是否强制），不影响 Prompt 锚定。与 resolve_policy
+    的执行模式（off/guide/repair/strict）正交——一个决定“哪些契约参与执行”，一个决定
+    “参与执行的契约处理到什么程度”。
+    """
+    conv = conversation_overrides or {}
+    v = conv.get("output_contract_require_confirmed")
+    if v is not None:
+        return bool(v)
+    acc = (account_defaults or {}).get("output_contract_require_confirmed")
+    if acc is not None:
+        return bool(acc)
+    return bool(settings.OUTPUT_CONTRACT_REQUIRE_CONFIRMED)
 
 
 def _dispatch_auto(contract: VisibleOutputContract) -> str:

@@ -282,17 +282,17 @@ def test_detector_skips_mvu_tagged_entries_keeps_real_template():
                    "<JSONPatch>[]</JSONPatch></UpdateVariable>",
         "order": 10,
     }
-    assert detect_entry_heuristic(mvu_entry)["type"] == "none"
+    assert detect_entry_heuristic(mvu_entry)["definition"]["document_kind"] == "none"
 
     # 真正的状态栏模板仍被识别为尾部 HTML 模板。
     status = detect_entry_heuristic(dict(STATUS_ENTRY))
-    assert status["type"] == "tail_html"
-    assert status["status"] == "detected"
+    assert status["definition"]["document_kind"] == "tail_html"
+    assert status["lifecycle"]["status"] == "active"
 
 
 def test_heuristic_detect_marks_trigger_auto_import():
     oc = detect_entry_heuristic(dict(STATUS_ENTRY))
-    assert oc["trigger"] == "auto_import"
+    assert oc["provenance"]["trigger"] == "auto_import"
 
 
 @pytest.mark.asyncio
@@ -308,8 +308,8 @@ async def test_detect_single_entry_marks_trigger_manual(monkeypatch):
     )
     result = await oc_pkg.detect_single_entry(dict(STATUS_ENTRY))
     oc = result["output_contract"]
-    assert oc["trigger"] == "manual"
-    assert oc["type"] == "tail_html"
+    assert oc["provenance"]["trigger"] == "manual"
+    assert oc["definition"]["document_kind"] == "tail_html"
 
 
 def test_prompt_renderer_is_empty_for_none_and_lists_tail_blocks():
@@ -422,6 +422,31 @@ async def test_executor_guide_mode_validates_without_repair():
     assert result.actions == []
     assert result.display_content == broken  # guide 不修复
     assert result.diagnostics["initial"]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_executor_owns_tail_continuation_and_revalidation():
+    from app.services.output_contracts import compile_contract, enforce_visible_output_contract
+
+    contract = compile_contract([detected(STATUS_ENTRY)], {})
+    called: list[str] = []
+
+    async def continuation(reply: str) -> str:
+        called.append(reply)
+        return reply + "\n<details><summary>【状态栏】</summary>姓名：伶伶</details>"
+
+    result = await enforce_visible_output_contract(
+        content="正文",
+        display_content="正文",
+        contract=contract,
+        policy={"mode": "repair"},
+        tail_continuation=continuation,
+    )
+
+    assert called == ["正文"]
+    assert result.outcome == "passed"
+    assert result.method == "continuation"
+    assert {"action": "tail_continuation"} in result.actions
 
 
 @pytest.mark.asyncio
@@ -834,8 +859,8 @@ def test_compiled_contract_flags_empty_details_shell():
     assert {"section": "backend_log", "code": "empty_section"} in diag.missing
 
 
-def test_uncompiled_contract_allows_empty_shell():
-    # 未编译契约默认 allow_empty，空壳不应触发 empty_section（保持 ADR-1d 行为）。
+def test_v2_contract_flags_empty_shell_before_compiler():
+    # v2 Attachment 在读取期已带内容策略，直接通过 extractor 构建也应识别空壳。
     contract = _full_document_contract()
     reply = FULL_DOCUMENT_REPLY.replace(
         "<details><summary>后台日志</summary>日志内容</details>",
@@ -844,7 +869,59 @@ def test_uncompiled_contract_allows_empty_shell():
 
     diag = validate_visible_output(reply, contract)
 
-    assert all(m.get("code") != "empty_section" for m in diag.missing)
+    assert {"section": "backend_log", "code": "empty_section"} in diag.missing
+
+
+def test_v1_attachment_is_migrated_when_reading_contract():
+    entry = {
+        "uid": 88,
+        "comment": "旧格式",
+        "content": FULL_DOCUMENT_ENTRY["content"],
+        "output_contract": {
+            "type": "full_document",
+            "status": "detected",
+            "source": "llm",
+            "confidence": 0.9,
+            "abstract": {
+                "placement": "full_document",
+                "sections": [{"name": "章节号", "marker": "#", "required": True, "order": 10}],
+            },
+        },
+    }
+    from app.services.output_contracts.attachment import canonicalize_attachment
+
+    attachment = canonicalize_attachment(entry["output_contract"], entry)
+
+    assert attachment["schema_version"] == 2
+    assert attachment["definition"]["sections"][0]["id"] == "chapter"
+    assert attachment["provenance"]["source"] == "llm"
+
+
+def test_automatic_stale_attachment_does_not_enter_runtime_contract():
+    entry = detected(dict(STATUS_ENTRY))
+    entry["content"] += "\n内容已变更"
+
+    contract = build_visible_output_contract([entry])
+
+    assert contract.mode == OutputContractMode.NONE
+
+
+def test_reviewed_definition_survives_reidentification_as_manual_authority():
+    from app.services.output_contracts.attachment import apply_manual_definition
+    from app.services.output_contracts.detector import annotate_entries
+
+    entry = dict(FULL_DOCUMENT_ENTRY)
+    entry["output_contract"] = apply_manual_definition(
+        entry,
+        {"document_kind": "full_document", "sections": [{"id": "chapter"}]},
+    )
+    entry["content"] += "\n作者修改了格式说明"
+    updated = __import__("asyncio").run(annotate_entries([entry]))[0]
+
+    attachment = updated["output_contract"]
+    assert attachment["lifecycle"]["reviewed"] is True
+    assert attachment["provenance"]["source"] == "manual"
+    assert attachment["latest_auto_definition"]
 
 
 def _fd_entry(

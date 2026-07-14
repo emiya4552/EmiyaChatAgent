@@ -51,6 +51,8 @@ def strict_available(
         return False, "no_full_document"
     if contract.has_conflict:
         return False, "contract_conflict"
+    # 预留门控：strict_budget_ok 由上层在接入 token 预算后注入。当前 resolve_policy
+    # 不产出该键，故默认放行；真实预算不足时由底层 LLM 调用异常兜底降级，不在此处提前判。
     if not policy.get("strict_budget_ok", True):
         return False, "insufficient_budget"
     return True, ""
