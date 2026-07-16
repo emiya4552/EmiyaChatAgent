@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """对话业务逻辑：创建、列表、删除、消息查询。"""
+import logging
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -10,6 +11,7 @@ from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.persona import Persona
 from app.models.user import User
+from app.services.config_registry import filter_chat_config
 from app.services.mvu_runtime import (
     build_initial_state,
     build_mvu_policy_for_user_persona,
@@ -19,6 +21,8 @@ from app.services.mvu_runtime.opening import (
     process_opening_message,
 )
 from app.utils.exceptions import ForbiddenException, NotFoundException
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_uuid_list(values: list[str] | None) -> list[UUID]:
@@ -347,11 +351,21 @@ async def apply_preset_to_conversation(
 async def update_conversation_config(
     db: AsyncSession, conversation_id: UUID, chat_config: dict, user_id: UUID
 ) -> Conversation | None:
-    """直接更新对话配置。"""
+    """直接更新对话配置。
+
+    落库前按 config_registry 白名单过滤未知键（兼容前后端版本差 / 历史脏数据），
+    未知键丢弃并记 warning，不硬报错。
+    """
     conv = await get_conversation_by_id(db, conversation_id, user_id)
     if conv is None:
         return None
-    conv.chat_config = chat_config
+    clean_config, dropped = filter_chat_config(chat_config)
+    if dropped:
+        logger.warning(
+            "[核心] 对话 %s 的 chat_config 含未登记键，已丢弃：%s",
+            conversation_id, ", ".join(sorted(dropped)),
+        )
+    conv.chat_config = clean_config
     db.add(conv)
     await db.commit()
     await db.refresh(conv)

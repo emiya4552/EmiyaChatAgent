@@ -32,7 +32,7 @@ from app.services.conversation_service import (
     reload_conversation_mvu_initial_state,
     update_conversation_config,
 )
-from app.config import settings
+from app.services.config_registry import system_default_chat_config
 from app.services.mvu_runtime import (
     build_mvu_policy_for_user_persona,
     describe_conversation_mvu_state,
@@ -45,25 +45,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/conversations", tags=["对话"])
 
 
-def _system_default_chat_config() -> dict:
-    """系统层面真正会下发到 LLM / token budget 的默认值。
-    只列出我们有稳定单值默认的字段；像 top_p / top_k / repetition_penalty
-    我们不主动下发（由 LLM 端兜底），不在这里伪造默认值。
-    """
-    return {
-        "temperature": settings.CHAT_TEMPERATURE,
-        # 输出上限不放入默认回显；未显式配置时由短/中/长回复长度决定。
-        "openai_max_context": settings.MAX_CONTEXT_TOKENS,
-        "token_budget_safety_margin": settings.TOKEN_BUDGET_SAFETY_MARGIN,
-        "history_budget_cap": 0,
-        "worldbook_budget_pct": settings.WORLDBOOK_BUDGET_PCT,
-        "worldbook_budget_cap": settings.WORLDBOOK_BUDGET_CAP,
-    }
-
-
 def _compute_effective_chat_config(chat_config: dict | None) -> dict:
-    """系统默认 ∪ chat_config（后者优先）。用于前端配置面板回显当前生效值。"""
-    merged = _system_default_chat_config()
+    """系统默认 ∪ chat_config（后者优先）。用于前端配置面板回显当前生效值。
+
+    系统默认取自 config_registry（单一事实源）。
+    """
+    merged = system_default_chat_config()
     if chat_config:
         for k, v in chat_config.items():
             if v is not None:

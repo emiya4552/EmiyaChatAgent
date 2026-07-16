@@ -70,6 +70,14 @@ from app.services.token_budget import (
     count_text_tokens,
     resolve_worldbook_budget,
 )
+from app.services.config_registry import (
+    account_budget_defaults,
+    memory_enabled,
+    query_rewriting_enabled,
+    resolve_extraction_multiplier,
+    resolve_memory_tuning,
+    resolve_window_size,
+)
 from app.services.langgraph.state import ChatState
 
 logger = logging.getLogger(__name__)
@@ -108,17 +116,23 @@ async def node_retrieve_memories(state: ChatState) -> dict:
     # 记忆 block 关闭时，本轮不做向量检索，也不会产生 memory_recall 事件。
     if not _block_enabled(state, "memories"):
         return {"recalled_memories": []}
+    account_config = state.get("account_config")
+    # 账户级记忆总开关（ADR-4）：关时整套记忆系统停用（检索 + 提取都跳过），与
+    # 对话级 memories block（是否注入召回结果）正交。
+    if not memory_enabled(account_config):
+        return {"recalled_memories": []}
     try:
-        retrieval_query = await rewrite_query_for_retrieval(state["user_message"])
+        retrieval_query = await rewrite_query_for_retrieval(
+            state["user_message"], enabled=query_rewriting_enabled(account_config),
+        )
         user_id_str = str(state["user_id"])
         conv_scope = f"conversation:{state['conversation_id']}"
 
         memories = await search_memories(
             user_id=user_id_str,
             query=retrieval_query,
-            top_k=settings.MEMORY_TOP_K,
-            threshold=settings.MEMORY_SIMILARITY_THRESHOLD,
             scope_filter=conv_scope,
+            tuning=resolve_memory_tuning(account_config),
         )
 
         if memories:
@@ -476,10 +490,12 @@ async def node_prepare_history(state: ChatState) -> dict:
 
         summary = None
         summary_enabled = _block_enabled(state, "summary")
-        if len(all_messages) > settings.WINDOW_SIZE:
+        # 滑窗大小：账户级覆盖（ADR-4）→ 全局 settings.WINDOW_SIZE。
+        window_size = resolve_window_size(state.get("account_config"))
+        if len(all_messages) > window_size:
             # 先按消息数量切窗口：旧消息进入摘要候选，最近消息进入 prompt 候选。
-            overflow = all_messages[: len(all_messages) - settings.WINDOW_SIZE]
-            recent = all_messages[len(all_messages) - settings.WINDOW_SIZE :]
+            overflow = all_messages[: len(all_messages) - window_size]
+            recent = all_messages[len(all_messages) - window_size :]
 
             # 摘要 block 关闭时，不读取旧摘要，也不触发后台摘要任务。
             if summary_enabled:
@@ -653,6 +669,9 @@ async def node_build_prompt(state: ChatState) -> dict:
         # ── 历史预算与历史渲染 ──
         # 先用已渲染的 system 前缀估算剩余 token，再从最近窗口中保留尽量多的历史。
         cc = conv.chat_config or {}
+        # token 预算三层（ADR-4）：账户默认垫底 < 对话 chat_config。仅用于预算解析，
+        # 不影响 output_contract（build_visible_output_contract 仍用原始 cc）。
+        budget_cc = {**account_budget_defaults(state.get("account_config")), **cc}
         history_candidates = [
             {"role": m.get("role"), "content": m.get("content") or ""}
             for m in recent
@@ -668,7 +687,7 @@ async def node_build_prompt(state: ChatState) -> dict:
         ]
         budget_plan = build_prompt_budget_plan(
             prefix_messages=rendered + wi_budget_messages,
-            chat_config=cc,
+            chat_config=budget_cc,
             reply_length=state.get("reply_length", "medium"),
         )
         truncated = _truncate_history(recent, max(budget_plan.history_budget, 100))
@@ -832,7 +851,7 @@ async def node_build_prompt(state: ChatState) -> dict:
                 _count_tokens((entry or {}).get("content") or "")
                 for entry in wi_activated
             ),
-            worldbook_budget=resolve_worldbook_budget(cc),
+            worldbook_budget=resolve_worldbook_budget(budget_cc),
         )
 
         if truncated:
@@ -1374,8 +1393,18 @@ async def node_post_process(state: ChatState) -> dict:
             else:
                 dynamic_interval = settings.MEMORY_EXTRACTION_SPARSE
 
+            # 账户级提取频率倍率（ADR-4）：frequent=0.5 / standard=1 / sparse=2。
+            _acct = state.get("account_config")
+            dynamic_interval = max(
+                1, round(dynamic_interval * resolve_extraction_multiplier(_acct))
+            )
+
             last_extraction = conv.last_extraction_msg or 0
-            should_extract = msg_count - last_extraction >= dynamic_interval * 2
+            # 账户级记忆总开关关时不提取（与检索一致，整套记忆停用）。
+            should_extract = (
+                memory_enabled(_acct)
+                and msg_count - last_extraction >= dynamic_interval * 2
+            )
 
             if should_extract:
                 # 给提取模型多带几条上次窗口之前的上下文，减少断章取义。
@@ -1410,6 +1439,7 @@ async def node_post_process(state: ChatState) -> dict:
                     _asyncio.create_task(_extract_memories_delayed(
                         user_id=str(user_id), dialogues=dialogues,
                         conversation_id=conv_id, existing_memories=existing_memories,
+                        account_config=_acct,
                     ))
                     logger.info(
                         f"已触发后台记忆提取任务 (第 {extraction_count + 1} 次, "
@@ -1465,19 +1495,21 @@ async def _update_summary_background(
 async def _extract_memories_delayed(
     user_id: str, dialogues: list[dict], conversation_id: UUID,
     existing_memories: list[str] | None = None,
+    account_config: dict | None = None,
 ) -> None:
     """带可选延迟的后台记忆提取入口。"""
     if settings.MEMORY_EXTRACTION_DELAY > 0:
         await _asyncio.sleep(settings.MEMORY_EXTRACTION_DELAY)
     await _extract_memories_background(
         user_id=user_id, dialogues=dialogues, conversation_id=conversation_id,
-        existing_memories=existing_memories,
+        existing_memories=existing_memories, account_config=account_config,
     )
 
 
 async def _extract_memories_background(
     user_id: str, dialogues: list[dict], conversation_id: UUID,
     existing_memories: list[str] | None = None,
+    account_config: dict | None = None,
 ) -> None:
     """后台异步任务：从对话中提取长期记忆并存入 ChromaDB。"""
     try:
@@ -1490,7 +1522,7 @@ async def _extract_memories_background(
         async with AsyncSessionLocal() as db:
             count = await deduplicate_and_save(
                 user_id=user_id, extracted_memories=extracted, db=db,
-                conversation_id=conversation_id,
+                conversation_id=conversation_id, account_config=account_config,
             )
             if count > 0:
                 logger.info(f"后台记忆提取完成: {count} 条新记忆（用户 {user_id}）")

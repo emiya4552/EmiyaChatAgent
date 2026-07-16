@@ -101,6 +101,8 @@ async def process_chat(
     # persona_uses_mvu 压成有效值 + 剔除 MVU 标签条目 + 跳过 EJS + 隐藏卡 UI（前端）。
     _user_row = await db.get(User, user_id)
     mvu_compat_enabled = bool(_user_row.mvu_compat_enabled) if _user_row else True
+    # 账户级配置桶（ADR-4）：记忆调参 + token 预算账户默认。空 {} = 全部继承全局。
+    account_config = dict(getattr(_user_row, "account_config", None) or {}) if _user_row else {}
 
     # 2.7 可见输出契约聊天期执行配置（ADR-1f）：账户默认 + 对话 chat_config 覆盖。
     # node_post_process 用它 resolve_policy 出 executor 运行策略。
@@ -116,6 +118,12 @@ async def process_chat(
             "output_contract_strict_fallback": (
                 _user_row.output_contract_strict_fallback if _user_row else "repair"
             ),
+            # ADR-2c 严格声明模式账户默认（此前缺失，导致 resolve 恒退全局 settings）。
+            # _user_row 缺列（旧数据 refresh 前）时给 None → resolve 再回退全局。
+            "output_contract_require_confirmed": (
+                getattr(_user_row, "output_contract_require_confirmed", None)
+                if _user_row else None
+            ),
         },
         "overrides": {
             "output_contract_mode": _conv_cfg.get("output_contract_mode"),
@@ -125,7 +133,7 @@ async def process_chat(
             "output_contract_strict_fallback": _conv_cfg.get(
                 "output_contract_strict_fallback"
             ),
-            # ADR-2c 严格声明模式（对话级覆盖；账户级暂由全局 settings 兜底）。
+            # ADR-2c 严格声明模式（对话级覆盖 > 账户默认 > 全局 settings）。
             "output_contract_require_confirmed": _conv_cfg.get(
                 "output_contract_require_confirmed"
             ),
@@ -181,6 +189,7 @@ async def process_chat(
         "enabled_blocks": enabled_blocks,
         "mvu_compat_enabled": mvu_compat_enabled,
         "output_contract_config": output_contract_config,
+        "account_config": account_config,
         "token_budget_report": None,
     }
 

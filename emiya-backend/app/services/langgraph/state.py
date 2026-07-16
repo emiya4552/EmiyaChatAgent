@@ -70,6 +70,10 @@ class ChatState(TypedDict):
     # chat_service 从 User + conversation.chat_config 载入，node_post_process 用它
     # 连同已编译契约 resolve_policy 出 executor 的运行策略。
     output_contract_config: dict | None
+    # 账户级配置桶（配置系统 ADR-4）：User.account_config JSONB（记忆系统调参 + token 预算
+    # 账户默认）。chat_service 从 User 载入；node_retrieve_memories / node_prepare_history /
+    # node_post_process / node_build_prompt 经 config_registry 解析器读它（缺省回退全局）。
+    account_config: dict | None
     # MVU 变量作用域 — dual-bucket {"local","global","names"}（详见 docs/adr/0007）
     # 由 node_build_prompt 加载/产出，node_post_process 成功时写回 DB（幂等）
     mvu_scope: dict

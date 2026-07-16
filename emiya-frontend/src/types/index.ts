@@ -119,6 +119,30 @@ export interface ImportParseResult {
 
 // ─── 用户 ───
 
+// 账户级配置桶（ADR-4）：记忆系统调参 + token 预算账户默认。所有键可选，
+// 缺省=继承全局默认；键/默认/钳制的权威源见 config/configSchema.ts 与后端 config_registry。
+export interface AccountConfig {
+  // 记忆系统
+  memory_enabled?: boolean
+  memory_extraction_cadence?: 'frequent' | 'standard' | 'sparse'
+  memory_query_rewriting?: boolean
+  memory_contradiction_detection?: boolean
+  memory_top_k?: number
+  memory_similarity_threshold?: number
+  memory_recency_weight?: number
+  memory_recency_half_life_days?: number
+  memory_mmr_lambda?: number
+  memory_dedup_threshold?: number
+  // 上下文
+  window_size?: number
+  // token 预算账户默认（键名与 chat_config 同名）
+  openai_max_context?: number
+  token_budget_safety_margin?: number
+  history_budget_cap?: number
+  worldbook_budget_pct?: number
+  worldbook_budget_cap?: number
+}
+
 export interface User {
   id: string
   email: string
@@ -138,6 +162,10 @@ export interface User {
   output_contract_default_mode: string
   output_contract_allow_full_rewrite: boolean
   output_contract_strict_fallback: string
+  // 严格声明模式账户默认（ADR-2c）；null = 未表态，继承全局默认
+  output_contract_require_confirmed: boolean | null
+  // 账户级配置桶（ADR-4）：记忆系统调参 + token 预算账户默认
+  account_config: AccountConfig
   created_at: string
 }
 
@@ -152,6 +180,10 @@ export interface UserUpdateRequest {
   output_contract_default_mode?: string
   output_contract_allow_full_rewrite?: boolean
   output_contract_strict_fallback?: string
+  // null 显式发送 = 清空账户表态，回到继承全局默认
+  output_contract_require_confirmed?: boolean | null
+  // 账户级配置桶（ADR-4）：增量合并入现有 account_config；键值 null=清空该项回退全局
+  account_config?: Partial<Record<keyof AccountConfig, number | boolean | string | null>>
 }
 
 export interface UserSession {

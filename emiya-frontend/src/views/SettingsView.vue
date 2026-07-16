@@ -124,17 +124,20 @@
                 @update:value="saveOutputContractDetectionEnabled"
               />
             </n-form-item>
-            <n-form-item label="每次最多检测条数">
-              <n-input-number
-                v-model:value="outputContractLlmDetectionLimit"
-                :min="0"
-                :max="200"
-                :step="5"
-                :disabled="!outputContractLlmDetectionEnabled"
-                style="width: 180px"
-                @blur="saveOutputContractDetectionLimit"
-              />
-            </n-form-item>
+            <n-collapse v-if="outputContractLlmDetectionEnabled" class="advanced-collapse">
+              <n-collapse-item title="高级设置" name="adv">
+                <n-form-item label="每次最多检测条数">
+                  <n-input-number
+                    v-model:value="outputContractLlmDetectionLimit"
+                    :min="0"
+                    :max="200"
+                    :step="5"
+                    style="width: 180px"
+                    @blur="saveOutputContractDetectionLimit"
+                  />
+                </n-form-item>
+              </n-collapse-item>
+            </n-collapse>
             <p class="hint">
               开启后，导入或编辑世界书时会让 AI 尝试识别“状态栏、Markdown 表格、JSON 块、章节/选项/后台日志”等输出格式要求，
               并保存到条目里供聊天时使用。检测条数越大，覆盖越全面，但导入等待时间和模型调用次数也会增加。
@@ -155,22 +158,40 @@
                 @update:value="saveOutputContractDefaultMode"
               />
             </n-form-item>
-            <n-form-item label="允许整篇 rewrite 兜底">
-              <n-switch
-                v-model:value="outputContractAllowFullRewrite"
-                :loading="savingOutputContractExec"
-                @update:value="saveOutputContractAllowFullRewrite"
-              />
-            </n-form-item>
-            <n-form-item label="strict 不可用时降级">
-              <n-select
-                v-model:value="outputContractStrictFallback"
-                :options="outputContractFallbackOptions"
-                :loading="savingOutputContractExec"
-                style="width: 200px"
-                @update:value="saveOutputContractStrictFallback"
-              />
-            </n-form-item>
+            <n-collapse v-if="outputContractDefaultMode !== 'off'" class="advanced-collapse">
+              <n-collapse-item title="高级设置" name="adv">
+                <n-form-item label="允许整篇 rewrite 兜底">
+                  <n-switch
+                    v-model:value="outputContractAllowFullRewrite"
+                    :loading="savingOutputContractExec"
+                    @update:value="saveOutputContractAllowFullRewrite"
+                  />
+                </n-form-item>
+                <n-form-item label="strict 不可用时降级">
+                  <n-select
+                    v-model:value="outputContractStrictFallback"
+                    :options="outputContractFallbackOptions"
+                    :loading="savingOutputContractExec"
+                    style="width: 200px"
+                    @update:value="saveOutputContractStrictFallback"
+                  />
+                </n-form-item>
+                <n-form-item label="严格声明模式默认">
+                  <n-select
+                    v-model:value="outputContractRequireConfirmed"
+                    :options="outputContractRequireConfirmedOptions"
+                    :loading="savingOutputContractExec"
+                    style="width: 200px"
+                    @update:value="saveOutputContractRequireConfirmed"
+                  />
+                </n-form-item>
+                <p class="hint">
+                  严格声明模式（ADR-2c）：开启后聊天只<strong>执行</strong>已确认 / 声明的契约，
+                  未确认的自动识别草稿仅作 Prompt 引导。“跟随全局默认”时用部署级默认（通常关）。
+                  单个对话仍可在对话设置里覆盖。
+                </p>
+              </n-collapse-item>
+            </n-collapse>
             <p class="hint">
               该设置决定<strong>聊天时</strong>如何处理世界书要求的可见输出格式，与上面的“导入期识别”是两回事。
               <br />· <strong>auto</strong>（默认）：状态栏尾部块自动补写；整篇结构只注入约束并诊断，不自动改写回复。
@@ -200,6 +221,84 @@
                 保存主题
               </n-button>
             </div>
+          </div>
+        </n-tab-pane>
+
+        <!-- ───── Tab: 记忆 / 预算（ADR-4）───── -->
+        <n-tab-pane name="advanced" tab="记忆 / 预算">
+          <div class="section">
+            <n-form-item label="记忆系统">
+              <n-switch
+                :value="memoryEnabled"
+                :loading="savingAccount"
+                @update:value="onMemoryEnabled"
+              />
+              <span class="switch-hint">
+                总开关：关闭后本账户所有对话都不检索、不提取长期记忆（与对话内“记忆”注入块正交）。
+              </span>
+            </n-form-item>
+            <n-collapse v-if="memoryEnabled" class="advanced-collapse">
+              <n-collapse-item title="高级设置" name="adv">
+                <n-form-item label="提取频率">
+                  <n-select
+                    :value="memoryCadence"
+                    :options="EXTRACTION_CADENCE_OPTIONS"
+                    :loading="savingAccount"
+                    style="width: 160px"
+                    @update:value="onCadence"
+                  />
+                </n-form-item>
+                <n-form-item label="Query 改写">
+                  <n-switch :value="memoryQueryRewriting" :loading="savingAccount" @update:value="onQueryRewriting" />
+                </n-form-item>
+                <n-form-item label="矛盾检测">
+                  <n-switch :value="memoryContradiction" :loading="savingAccount" @update:value="onContradiction" />
+                </n-form-item>
+                <n-form-item v-for="knob in MEMORY_ADVANCED_KNOBS" :key="knob.key" :label="knob.label">
+                  <n-input-number
+                    :value="accountConfig[knob.key] ?? null"
+                    :min="knob.min"
+                    :max="knob.max"
+                    :step="knob.step"
+                    :placeholder="knob.placeholder"
+                    clearable
+                    style="width: 180px"
+                    @update:value="(v) => onKnobChange(knob.key, v)"
+                  />
+                </n-form-item>
+                <div class="actions">
+                  <n-button size="small" :loading="savingAccount" @click="resetMemoryAdvanced">
+                    复位为全局默认
+                  </n-button>
+                </div>
+                <p class="hint">
+                  专家旋钮：阈值 / 权重设置不当会降低记忆召回质量。留空 = 跟随全局默认（后端会钳制到安全区间）。
+                </p>
+              </n-collapse-item>
+            </n-collapse>
+          </div>
+
+          <n-divider />
+
+          <div class="section">
+            <h3 class="section-title">上下文 / Token 预算默认（新对话继承）</h3>
+            <n-form-item v-for="knob in BUDGET_ACCOUNT_KNOBS" :key="knob.key" :label="knob.label">
+              <n-input-number
+                :value="accountConfig[knob.key] ?? null"
+                :min="knob.min"
+                :max="knob.max"
+                :step="knob.step"
+                :placeholder="knob.placeholder"
+                clearable
+                style="width: 200px"
+                @update:value="(v) => onKnobChange(knob.key, v)"
+              />
+            </n-form-item>
+            <p class="hint">
+              “上下文总上限”= 单轮请求的总 token 天花板（input + 输出共享），预算规划器把它切成
+              历史 / 世界书 / 输出 / 安全余量；“滑窗大小”则是按<strong>消息条数</strong>保留多少条最近对话，两者单位不同。
+              账户级默认垫在对话覆盖之下：某对话若单独调了预算，以对话设置为准。留空 = 跟随全局默认。
+            </p>
           </div>
         </n-tab-pane>
 
@@ -361,9 +460,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  NButton, NDivider, NForm, NFormItem, NIcon, NInput, NInputNumber, NSelect, NSwitch,
-  NTabPane, NTag, NTabs, NUpload, useDialog, useMessage,
+  NButton, NCollapse, NCollapseItem, NDivider, NForm, NFormItem, NIcon, NInput,
+  NInputNumber, NSelect, NSwitch, NTabPane, NTag, NTabs, NUpload, useDialog, useMessage,
 } from 'naive-ui'
+import {
+  boolFromInherit, boolToInherit,
+  MEMORY_ADVANCED_KNOBS, BUDGET_ACCOUNT_KNOBS, EXTRACTION_CADENCE_OPTIONS,
+} from '../config/configSchema'
+import type { AccountConfig } from '../types'
 import {
   isHtmlIframeRenderEnabled, setHtmlIframeRenderEnabled,
 } from '../composables/useHtmlIframeRender'
@@ -468,6 +572,10 @@ async function saveOutputContractDetectionLimit() {
 const outputContractDefaultMode = ref(user.value?.output_contract_default_mode ?? 'auto')
 const outputContractAllowFullRewrite = ref(user.value?.output_contract_allow_full_rewrite ?? false)
 const outputContractStrictFallback = ref(user.value?.output_contract_strict_fallback ?? 'repair')
+// 严格声明模式账户默认：可空三态，null=跟随全局默认。UI 用 boolFromInherit 映射到 inherit/yes/no。
+const outputContractRequireConfirmed = ref<string>(
+  boolFromInherit(user.value?.output_contract_require_confirmed)
+)
 const savingOutputContractExec = ref(false)
 const outputContractModeOptions = [
   { label: 'auto（按类型自动）', value: 'auto' },
@@ -480,6 +588,12 @@ const outputContractFallbackOptions = [
   { label: 'repair', value: 'repair' },
   { label: 'guide', value: 'guide' },
   { label: 'off', value: 'off' },
+]
+// 账户级严格声明模式：inherit=跟随全局默认（区别于对话级的“继承账户”）。
+const outputContractRequireConfirmedOptions = [
+  { label: '跟随全局默认', value: 'inherit' },
+  { label: '开启', value: 'yes' },
+  { label: '关闭', value: 'no' },
 ]
 
 async function saveOutputContractDefaultMode(v: string) {
@@ -519,6 +633,67 @@ async function saveOutputContractStrictFallback(v: string) {
   } finally {
     savingOutputContractExec.value = false
   }
+}
+
+async function saveOutputContractRequireConfirmed(v: string) {
+  savingOutputContractExec.value = true
+  try {
+    // boolToInherit: inherit→null（清空账户表态，回退全局）、yes→true、no→false
+    await authStore.updateMe({ output_contract_require_confirmed: boolToInherit(v) })
+    message.success(
+      v === 'inherit' ? '严格声明模式：跟随全局默认'
+        : v === 'yes' ? '新对话默认开启严格声明模式' : '新对话默认关闭严格声明模式'
+    )
+  } catch (err: any) {
+    outputContractRequireConfirmed.value = boolFromInherit(user.value?.output_contract_require_confirmed)
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingOutputContractExec.value = false
+  }
+}
+
+// ── 账户级配置桶（ADR-4）：记忆系统 + token 预算账户默认，增量保存 ──
+const accountConfig = ref<AccountConfig>({ ...(user.value?.account_config || {}) })
+const savingAccount = ref(false)
+
+async function saveAccountConfig(
+  patch: Record<string, number | boolean | string | null>,
+) {
+  savingAccount.value = true
+  try {
+    await authStore.updateMe({ account_config: patch })
+    // updateMe 已把合并/钳制后的 user 写回 store；同步本地视图。
+    accountConfig.value = { ...(user.value?.account_config || {}) }
+  } catch (err: any) {
+    accountConfig.value = { ...(user.value?.account_config || {}) }
+    message.error(err.response?.data?.detail || '保存失败')
+  } finally {
+    savingAccount.value = false
+  }
+}
+
+// getter：未设账户值时用 UI 默认显示（真正的“继承全局”在后端解析）。
+const memoryEnabled = computed(() => accountConfig.value.memory_enabled ?? true)
+const memoryCadence = computed(() => accountConfig.value.memory_extraction_cadence ?? 'standard')
+const memoryQueryRewriting = computed(() => accountConfig.value.memory_query_rewriting ?? true)
+const memoryContradiction = computed(() => accountConfig.value.memory_contradiction_detection ?? true)
+
+function onMemoryEnabled(v: boolean) { saveAccountConfig({ memory_enabled: v }) }
+function onCadence(v: string) { saveAccountConfig({ memory_extraction_cadence: v }) }
+function onQueryRewriting(v: boolean) { saveAccountConfig({ memory_query_rewriting: v }) }
+function onContradiction(v: boolean) { saveAccountConfig({ memory_contradiction_detection: v }) }
+// 数字旋钮：null（清空）= 回退全局；否则存账户值（后端钳制）。
+function onKnobChange(key: string, v: number | null) { saveAccountConfig({ [key]: v }) }
+
+async function resetMemoryAdvanced() {
+  const patch: Record<string, null> = {
+    memory_extraction_cadence: null,
+    memory_query_rewriting: null,
+    memory_contradiction_detection: null,
+  }
+  for (const k of MEMORY_ADVANCED_KNOBS) patch[k.key] = null
+  await saveAccountConfig(patch)
+  message.success('记忆高级设置已复位为全局默认')
 }
 
 function onRenderHtmlIframeChange(v: boolean) {
@@ -762,6 +937,7 @@ async function doDeleteAccount() {
 }
 .page-title { margin: 0; font-size: 22px; }
 .section { padding: 12px 4px; }
+.advanced-collapse { margin: 4px 0 8px; }
 .section-title { margin: 0 0 16px; font-size: 16px; }
 .section-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 12px; }
