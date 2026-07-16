@@ -10,16 +10,22 @@ from __future__ import annotations
 from typing import Any
 
 from app.config import settings
+from app.services.config_registry import (
+    DEFAULT_MODE,
+    DEFAULT_STRICT_FALLBACK,
+    EXECUTION_MODES,
+    STRICT_FALLBACKS,
+)
 from app.services.output_contracts.types import VisibleOutputContract
 
-# 聊天期执行模式全集。
-EXECUTION_MODES = {"off", "auto", "guide", "repair", "strict"}
-STRICT_FALLBACKS = {"repair", "guide", "off"}
+# 执行模式全集 / 默认值集中在 config_registry（单一事实源），此处仅 re-export 兼容旧引用。
+__all__ = [
+    "EXECUTION_MODES", "STRICT_FALLBACKS", "DEFAULT_MODE", "DEFAULT_STRICT_FALLBACK",
+    "resolve_policy", "resolve_require_confirmed",
+]
 
-DEFAULT_MODE = "auto"
-DEFAULT_STRICT_FALLBACK = "repair"
-
-# 对话覆盖里表示"继承账户默认"的取值。
+# 对话覆盖里表示"继承账户默认"的取值。canonical 写法是 None（null）；"" / "inherit"
+# 仅为兼容历史存量的容忍读，前端统一写 null（详见配置系统 ADR）。
 _INHERIT = {None, "", "inherit"}
 
 

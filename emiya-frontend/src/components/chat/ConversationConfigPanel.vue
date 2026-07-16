@@ -56,24 +56,28 @@
           <n-form-item label="Temperature" label-placement="left">
             <n-input-number v-model:value="localConfig.temperature" :min="0" :max="2" :step="0.05" />
           </n-form-item>
-          <n-form-item label="Top P" label-placement="left">
-            <n-input-number v-model:value="localConfig.top_p" :min="0" :max="1" :step="0.01" />
-          </n-form-item>
-          <n-form-item label="Top K" label-placement="left">
-            <n-input-number v-model:value="localConfig.top_k" :min="0" :max="200" :step="1" />
-          </n-form-item>
-          <n-form-item label="Min P" label-placement="left">
-            <n-input-number v-model:value="localConfig.min_p" :min="0" :max="1" :step="0.01" />
-          </n-form-item>
-          <n-form-item label="Frequency Penalty" label-placement="left">
-            <n-input-number v-model:value="localConfig.frequency_penalty" :min="-2" :max="2" :step="0.01" />
-          </n-form-item>
-          <n-form-item label="Presence Penalty" label-placement="left">
-            <n-input-number v-model:value="localConfig.presence_penalty" :min="-2" :max="2" :step="0.01" />
-          </n-form-item>
-          <n-form-item label="Repetition Penalty" label-placement="left">
-            <n-input-number v-model:value="localConfig.repetition_penalty" :min="1" :max="2" :step="0.01" />
-          </n-form-item>
+          <n-collapse class="advanced-collapse">
+            <n-collapse-item title="高级采样" name="adv">
+              <n-form-item label="Top P" label-placement="left">
+                <n-input-number v-model:value="localConfig.top_p" :min="0" :max="1" :step="0.01" />
+              </n-form-item>
+              <n-form-item label="Top K" label-placement="left">
+                <n-input-number v-model:value="localConfig.top_k" :min="0" :max="200" :step="1" />
+              </n-form-item>
+              <n-form-item label="Min P" label-placement="left">
+                <n-input-number v-model:value="localConfig.min_p" :min="0" :max="1" :step="0.01" />
+              </n-form-item>
+              <n-form-item label="Frequency Penalty" label-placement="left">
+                <n-input-number v-model:value="localConfig.frequency_penalty" :min="-2" :max="2" :step="0.01" />
+              </n-form-item>
+              <n-form-item label="Presence Penalty" label-placement="left">
+                <n-input-number v-model:value="localConfig.presence_penalty" :min="-2" :max="2" :step="0.01" />
+              </n-form-item>
+              <n-form-item label="Repetition Penalty" label-placement="left">
+                <n-input-number v-model:value="localConfig.repetition_penalty" :min="1" :max="2" :step="0.01" />
+              </n-form-item>
+            </n-collapse-item>
+          </n-collapse>
         </div>
       </n-collapse-item>
 
@@ -109,8 +113,8 @@
           <div class="budget-controls">
             <div class="budget-control">
               <div class="budget-control-meta">
-                <strong>上下文窗口</strong>
-                <span>模型单次请求容量</span>
+                <strong>上下文总上限 (tokens)</strong>
+                <span>单轮请求总 token 天花板（input + 输出共享）</span>
               </div>
               <n-slider v-model:value="contextBudgetControl" :min="1000" :max="2000000" :step="1000" />
               <n-input-number v-model:value="contextBudgetControl" :min="1000" :max="2000000" :step="1000" />
@@ -313,33 +317,37 @@
               strict=分阶段结构化生成（延迟/成本更高，草稿不流式）。只保证结构，不承诺剧情质量。
             </span>
           </n-form-item>
-          <n-form-item label="整篇 rewrite 兜底" label-placement="left">
-            <n-select
-              v-model:value="ocRewriteControl"
-              :options="ocRewriteOptions"
-              style="width: 160px"
-            />
-            <span class="switch-hint">独立许可，默认继承账户设置；开启后仅在局部修复不足时最多整篇重写一次。</span>
-          </n-form-item>
-          <n-form-item label="strict 降级" label-placement="left">
-            <n-select
-              v-model:value="ocStrictFallbackControl"
-              :options="ocFallbackOptions"
-              style="width: 160px"
-            />
-            <span class="switch-hint">strict 不可用或预算不足时的降级模式。</span>
-          </n-form-item>
-          <n-form-item label="严格声明模式" label-placement="left">
-            <n-select
-              v-model:value="ocRequireConfirmedControl"
-              :options="ocRequireConfirmedOptions"
-              style="width: 160px"
-            />
-            <span class="switch-hint">
-              ADR-2c：开启后本对话只执行已确认 / 声明的契约，未确认的自动识别草稿仅作
-              Prompt 引导（不做校验后修复 / 续写 / strict）。默认继承（全局默认关，开箱即用）。
-            </span>
-          </n-form-item>
+          <n-collapse v-if="ocModeControl !== 'off'" class="advanced-collapse">
+            <n-collapse-item title="高级设置" name="adv">
+              <n-form-item label="整篇 rewrite 兜底" label-placement="left">
+                <n-select
+                  v-model:value="ocRewriteControl"
+                  :options="ocRewriteOptions"
+                  style="width: 160px"
+                />
+                <span class="switch-hint">独立许可，默认继承账户设置；开启后仅在局部修复不足时最多整篇重写一次。</span>
+              </n-form-item>
+              <n-form-item label="strict 降级" label-placement="left">
+                <n-select
+                  v-model:value="ocStrictFallbackControl"
+                  :options="ocFallbackOptions"
+                  style="width: 160px"
+                />
+                <span class="switch-hint">strict 不可用或预算不足时的降级模式。</span>
+              </n-form-item>
+              <n-form-item label="严格声明模式" label-placement="left">
+                <n-select
+                  v-model:value="ocRequireConfirmedControl"
+                  :options="ocRequireConfirmedOptions"
+                  style="width: 160px"
+                />
+                <span class="switch-hint">
+                  ADR-2c：开启后本对话只执行已确认 / 声明的契约，未确认的自动识别草稿仅作
+                  Prompt 引导（不做校验后修复 / 续写 / strict）。默认继承（账户默认，开箱即用）。
+                </span>
+              </n-form-item>
+            </n-collapse-item>
+          </n-collapse>
           <div v-if="lastContractDiag" class="oc-last-round">
             <strong>上轮结构结果：</strong>
             <span>{{ lastContractSummary }}</span>
@@ -402,6 +410,9 @@ import type {
   ChatConfig, WorldbookListItem, PresetInfo, TemplateListItem, RegexPresetInfo,
   MvuUpdateInfo, TokenBudgetReport, OutputContractDiag,
 } from '../../types'
+import {
+  enumFromInherit, enumToInherit, boolFromInherit, boolToInherit, INHERIT_BOOL_OPTIONS,
+} from '../../config/configSchema'
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -722,6 +733,7 @@ const ocModeOptions = [
   { label: 'repair（修复+补写）', value: 'repair' },
   { label: 'strict（结构化生成）', value: 'strict' },
 ]
+// rewrite 用「允许/禁止」措辞（语义即布尔三态）；require_confirmed 直接复用通用继承选项。
 const ocRewriteOptions = [
   { label: '继承', value: 'inherit' },
   { label: '允许', value: 'yes' },
@@ -733,39 +745,24 @@ const ocFallbackOptions = [
   { label: 'guide', value: 'guide' },
   { label: 'off', value: 'off' },
 ]
-const ocRequireConfirmedOptions = [
-  { label: '继承', value: 'inherit' },
-  { label: '开启', value: 'yes' },
-  { label: '关闭', value: 'no' },
-]
+const ocRequireConfirmedOptions = INHERIT_BOOL_OPTIONS
+// 全部可继承覆盖统一走 configSchema 的 fromInherit/toInherit（null=继承账户默认）。
 const ocModeControl = computed<string>({
-  get: () => localConfig.value.output_contract_mode ?? 'inherit',
-  set: (s) => { localConfig.value.output_contract_mode = s === 'inherit' ? null : s },
+  get: () => enumFromInherit(localConfig.value.output_contract_mode),
+  set: (s) => { localConfig.value.output_contract_mode = enumToInherit(s) },
 })
 const ocStrictFallbackControl = computed<string>({
-  get: () => localConfig.value.output_contract_strict_fallback ?? 'inherit',
-  set: (s) => { localConfig.value.output_contract_strict_fallback = s === 'inherit' ? null : s },
+  get: () => enumFromInherit(localConfig.value.output_contract_strict_fallback),
+  set: (s) => { localConfig.value.output_contract_strict_fallback = enumToInherit(s) },
 })
 const ocRewriteControl = computed<string>({
-  get: () => {
-    const v = localConfig.value.output_contract_allow_full_rewrite
-    return v === true ? 'yes' : v === false ? 'no' : 'inherit'
-  },
-  set: (s) => {
-    localConfig.value.output_contract_allow_full_rewrite =
-      s === 'yes' ? true : s === 'no' ? false : null
-  },
+  get: () => boolFromInherit(localConfig.value.output_contract_allow_full_rewrite),
+  set: (s) => { localConfig.value.output_contract_allow_full_rewrite = boolToInherit(s) },
 })
-// ADR-2f 前端开关（机制见 ADR-2c 严格声明模式）：yes=只执行已确认/声明契约，no=草稿照旧生效，inherit=全局默认。
+// ADR-2f（机制见 ADR-2c）：yes=只执行已确认/声明契约，no=草稿照旧生效，inherit=账户默认。
 const ocRequireConfirmedControl = computed<string>({
-  get: () => {
-    const v = localConfig.value.output_contract_require_confirmed
-    return v === true ? 'yes' : v === false ? 'no' : 'inherit'
-  },
-  set: (s) => {
-    localConfig.value.output_contract_require_confirmed =
-      s === 'yes' ? true : s === 'no' ? false : null
-  },
+  get: () => boolFromInherit(localConfig.value.output_contract_require_confirmed),
+  set: (s) => { localConfig.value.output_contract_require_confirmed = boolToInherit(s) },
 })
 
 // 上一轮结构结果：取最近一条带 output_contract 的 assistant 消息诊断。
@@ -935,6 +932,7 @@ async function handleSave() {
 .config-panel { padding: 4px 0; }
 .config-title { margin: 0 0 16px; font-size: 18px; }
 .params-grid { display: flex; flex-direction: column; gap: 4px; }
+.advanced-collapse { margin: 2px 0 4px; }
 .bindings-grid { display: flex; flex-direction: column; gap: 4px; }
 .wb-bind { padding: 4px 0; }
 .hint { color: var(--color-text-tertiary); font-size: 12px; margin: 6px 0 0; }

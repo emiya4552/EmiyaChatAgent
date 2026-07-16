@@ -69,6 +69,11 @@ class UserResponse(BaseModel):
     output_contract_default_mode: str = "auto"
     output_contract_allow_full_rewrite: bool = False
     output_contract_strict_fallback: str = "repair"
+    # 严格声明模式账户默认（详见 docs/feat-adr/adr2c + 配置系统 ADR）；
+    # None = 该账户未表态，继承全局 settings.OUTPUT_CONTRACT_REQUIRE_CONFIRMED
+    output_contract_require_confirmed: bool | None = None
+    # 账户级配置桶（ADR-4）：记忆系统调参 + token 预算账户默认。空 {} = 全部继承全局。
+    account_config: dict = {}
     created_at: datetime
 
     class Config:
@@ -109,6 +114,15 @@ class UserUpdateRequest(BaseModel):
         None,
         pattern="^(repair|guide|off)$",
         description="strict 不可用时的降级模式",
+    )
+    output_contract_require_confirmed: bool | None = Field(
+        None,
+        description="严格声明模式账户默认：on 时聊天只执行已确认/声明的契约（详见 ADR-2c）",
+    )
+    account_config: dict | None = Field(
+        None,
+        description="账户级配置桶（ADR-4）：增量合并入现有 account_config，白名单+钳制；"
+                    "键值为 null=清空该项回退全局。未知键丢弃",
     )
 
 

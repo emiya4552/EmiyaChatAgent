@@ -35,6 +35,8 @@ describe('MessageBubble', () => {
       output_contract_default_mode: 'auto',
       output_contract_allow_full_rewrite: false,
       output_contract_strict_fallback: 'repair',
+      output_contract_require_confirmed: null,
+      account_config: {},
       created_at: '2026-01-01T00:00:00Z',
     }
 

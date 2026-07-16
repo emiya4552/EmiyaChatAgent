@@ -23,6 +23,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.user_session import UserSession
 from app.schemas.auth import UserResponse, UserSessionResponse, UserUpdateRequest
+from app.services.config_registry import filter_account_config
 from app.services.session_service import (
     list_user_sessions,
     revoke_all_sessions,
@@ -96,6 +97,18 @@ async def update_me(
         # css_theme: 空字符串视为清空（写入 NULL）
         if field == "css_theme" and value == "":
             setattr(current_user, "css_theme", None)
+        elif field == "account_config":
+            # 账户级配置桶（ADR-4）：增量合并入现有 dict（前端每次只存改动的键），
+            # 再经 filter_account_config 白名单+钳制；键值 null=清空该项回退全局。
+            merged = dict(current_user.account_config or {})
+            merged.update(value or {})
+            clean, dropped = filter_account_config(merged)
+            if dropped:
+                logger.warning(
+                    "[核心] 用户 %s account_config 含未登记键，已丢弃：%s",
+                    current_user.id, ", ".join(sorted(dropped)),
+                )
+            current_user.account_config = clean
         else:
             setattr(current_user, field, value)
     db.add(current_user)

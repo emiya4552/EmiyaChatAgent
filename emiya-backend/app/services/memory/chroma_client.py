@@ -15,6 +15,7 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 
 from app.config import settings
+from app.services.config_registry import MemoryTuning
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +102,16 @@ def _l2_to_similarity(distance: float) -> float:
         return max(0.0, math.exp(-distance / 1.5))
 
 
-def _get_recency_weight(extracted_at: str | None) -> float:
+def _get_recency_weight(extracted_at: str | None, half_life_days: float | None = None) -> float:
     """计算记忆的时新权重。
 
     使用指数衰减: recency = 2^(-days_since / half_life_days)
+    half_life_days: 账户级覆盖（ADR-4）；None 时回退全局 settings.RECENCY_HALF_LIFE_DAYS。
     """
     if not extracted_at:
         return 0.5
+    if half_life_days is None:
+        half_life_days = settings.RECENCY_HALF_LIFE_DAYS
     try:
         extracted_dt = datetime.fromisoformat(extracted_at)
         now = datetime.now(timezone.utc)
@@ -115,7 +119,7 @@ def _get_recency_weight(extracted_at: str | None) -> float:
             from datetime import timezone as tz
             extracted_dt = extracted_dt.replace(tzinfo=tz.utc)
         days = (now - extracted_dt).total_seconds() / 86400.0
-        return math.pow(2, -days / settings.RECENCY_HALF_LIFE_DAYS)
+        return math.pow(2, -days / half_life_days)
     except Exception:
         return 0.5
 
@@ -208,19 +212,25 @@ async def search_memories(
     top_k: int | None = None,
     threshold: float | None = None,
     scope_filter: str | None = None,
+    tuning: MemoryTuning | None = None,
 ) -> list[dict]:
     """语义搜索用户记忆，融合相似度 + 时新权重 + MMR 重排序。
 
     Args:
         scope_filter: 按 scope 过滤 ('conversation:{id}' / None=不筛选)
+        tuning: 账户级检索调参（ADR-4）；None 时全部回退全局 settings。
 
     Returns:
         [{"memory_id", "content", "category", "relevance", "recency_weight", "combined_score"}, ...]
     """
+    # 账户级调参（ADR-4）：显式 top_k/threshold 优先 > tuning > 全局默认。
     if top_k is None:
-        top_k = settings.MEMORY_TOP_K
+        top_k = tuning.top_k if tuning else settings.MEMORY_TOP_K
     if threshold is None:
-        threshold = settings.MEMORY_SIMILARITY_THRESHOLD
+        threshold = tuning.threshold if tuning else settings.MEMORY_SIMILARITY_THRESHOLD
+    recency_weight = tuning.recency_weight if tuning else settings.RECENCY_WEIGHT
+    recency_half_life = tuning.recency_half_life_days if tuning else settings.RECENCY_HALF_LIFE_DAYS
+    mmr_lambda = tuning.mmr_lambda if tuning else settings.MMR_LAMBDA
 
     try:
         collection = get_or_create_collection(user_id)
@@ -240,8 +250,10 @@ async def search_memories(
                 similarity = _l2_to_similarity(distance)
                 metadata = results.get("metadatas", [[]])[0][i] or {}
 
-                recency = _get_recency_weight(metadata.get("extracted_at"))
-                combined = (1 - settings.RECENCY_WEIGHT) * similarity + settings.RECENCY_WEIGHT * recency
+                recency = _get_recency_weight(
+                    metadata.get("extracted_at"), half_life_days=recency_half_life
+                )
+                combined = (1 - recency_weight) * similarity + recency_weight * recency
 
                 if combined >= threshold:
                     memories.append({
@@ -257,8 +269,8 @@ async def search_memories(
                         "conversation_id": metadata.get("conversation_id", ""),
                     })
 
-        # MMR 重排序去重
-        memories = _mmr_rerank(memories, query)
+        # MMR 重排序去重（lambda 账户可覆盖，ADR-4）
+        memories = _mmr_rerank(memories, query, lambda_param=mmr_lambda)
         memories = memories[:top_k]
 
         logger.debug(f"ChromaDB 检索: '{query[:40]}...' → {len(memories)} 条 (MMR reranked)")

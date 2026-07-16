@@ -11,6 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.memory import Memory
 from app.schemas.memory import MemoryExtractionResult
+from app.services.config_registry import (
+    contradiction_detection_enabled,
+    resolve_memory_tuning,
+)
 from app.services.llm_service import call_deepseek_non_stream
 from app.services.memory.chroma_client import add_memory, search_memories, delete_memory_vector
 
@@ -26,14 +30,20 @@ QUERY_REWRITE_PROMPT = """将以下口语化的对话消息改写为用于记忆
 仅返回改写后的查询文本，不要有其他内容。"""
 
 
-async def rewrite_query_for_retrieval(user_message: str) -> str:
+async def rewrite_query_for_retrieval(
+    user_message: str, *, enabled: bool | None = None
+) -> str:
     """将口语化用户消息改写为更适合向量检索的结构化查询。
 
     "嗯" → "日常闲聊 情绪表达"
     "我想喝奶茶" → "奶茶 饮品偏好"
     "今天不开心" → "负面情绪 今日经历"
+
+    enabled: 账户级覆盖（ADR-4）；None 时回退全局 settings.ENABLE_QUERY_REWRITING。
     """
-    if not settings.ENABLE_QUERY_REWRITING:
+    if enabled is None:
+        enabled = settings.ENABLE_QUERY_REWRITING
+    if not enabled:
         return user_message
 
     try:
@@ -217,13 +227,19 @@ CONTRADICTION_CHECK_PROMPT = """判断以下两条陈述是否存在逻辑矛盾
 - 只返回 JSON"""
 
 
-async def _detect_contradiction(existing_content: str, new_content: str) -> tuple[bool, str]:
+async def _detect_contradiction(
+    existing_content: str, new_content: str, *, enabled: bool | None = None
+) -> tuple[bool, str]:
     """检测两条记忆是否存在逻辑矛盾。
+
+    enabled: 账户级覆盖（ADR-4）；None 时回退全局 settings.ENABLE_CONTRADICTION_DETECTION。
 
     Returns:
         (is_contradiction, reason)
     """
-    if not settings.ENABLE_CONTRADICTION_DETECTION:
+    if enabled is None:
+        enabled = settings.ENABLE_CONTRADICTION_DETECTION
+    if not enabled:
         return False, ""
 
     try:
@@ -249,16 +265,23 @@ async def deduplicate_and_save(
     extracted_memories: list[MemoryExtractionResult],
     db: AsyncSession,
     conversation_id: UUID | None = None,
+    account_config: dict | None = None,
 ) -> int:
     """去重、矛盾检测后保存新记忆到 PostgreSQL + ChromaDB。
 
     scope 固定为 conversation:{conversation_id}。
+    account_config: 账户级覆盖（ADR-4）——去重阈值与矛盾检测开关；None 时回退全局。
 
     Returns:
         实际新增的记忆数量。
     """
     if not extracted_memories:
         return 0
+
+    # 账户级记忆调参（ADR-4）：dedup 阈值 + 矛盾检测开关（缺省回退全局）。
+    tuning = resolve_memory_tuning(account_config)
+    contradiction_enabled = contradiction_detection_enabled(account_config)
+    dedup_threshold = tuning.dedup_threshold
 
     count_result = await db.execute(
         select(func.count()).where(
@@ -275,8 +298,7 @@ async def deduplicate_and_save(
             logger.info(f"用户 {user_id} 记忆数已达上限 {max_allowed}")
             break
 
-        # 1. 相似度去重（收窄到当前对话）
-        dedup_threshold = settings.MEMORY_DEDUP_THRESHOLD
+        # 1. 相似度去重（收窄到当前对话）；dedup_threshold 已按账户 tuning 解析（见上）。
         dedup_scope = f"conversation:{conversation_id}" if conversation_id else None
         existing = await search_memories(
             user_id=user_id, query=mem.content, top_k=1,
@@ -287,7 +309,7 @@ async def deduplicate_and_save(
             if top["combined_score"] >= dedup_threshold:
                 # 2. 检查是否矛盾
                 has_contradiction, reason = await _detect_contradiction(
-                    top["content"], mem.content
+                    top["content"], mem.content, enabled=contradiction_enabled
                 )
                 if has_contradiction:
                     # 矛盾：标记旧记忆为已删除，继续保存新记忆

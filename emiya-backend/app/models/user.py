@@ -75,6 +75,21 @@ class User(Base, TimestampMixin):
     output_contract_strict_fallback: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default="repair", default="repair"
     )
+    # 严格声明模式账户默认（ADR-2c / 配置系统 ADR）：on 时聊天只**执行**已确认 / 声明
+    # 的契约，未确认草稿降为仅 Prompt 引导。对话 chat_config 可覆盖。
+    # **可空**是有意的：NULL=该账户未表态 → 继承全局 settings.OUTPUT_CONTRACT_REQUIRE_CONFIRMED；
+    # 唯有此项同时存在全局 env 层，故不能像其余三个执行默认那样用非空列（否则全局层被永久遮蔽）。
+    output_contract_require_confirmed: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, default=None
+    )
+
+    # === 账户级配置桶（配置系统 ADR-4）===
+    # 单个 JSONB 承载「用户可见的账户级偏好」：记忆系统（总开关/频率/检索旋钮）+
+    # token 预算账户默认。仿 chat_config，键/默认/钳制/白名单由 config_registry 统一管，
+    # 读取时 account_config.get(key) 缺省回退全局 settings。空 {} = 全部继承全局默认。
+    account_config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default="{}", default=dict
+    )
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email})>"
