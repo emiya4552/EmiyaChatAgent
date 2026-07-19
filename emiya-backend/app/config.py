@@ -147,6 +147,21 @@ class Settings(BaseSettings):
     # 默认关：后端照旧 apply（前端 UP 覆盖），保住无浏览器/关页时的兜底。前端运行时稳后再开。
     MVU_RETIRE_BACKEND_APPLY: bool = False
 
+    # MVU 变量更新策略（ADR-0022，默认 inline）：
+    #   inline    —— 主模型在正文末尾内联输出 <UpdateVariable><JSONPatch>…，后端内联解析应用，
+    #                卡的正则负责隐藏/美化。1 次 LLM 调用，最贴 ST/MagVarUpdate 原生约定，且能
+    #                同时吐 <StatusPlaceHolderImpl/> 让卡正则展状态栏——重逻辑/标签+正则卡靠这个。
+    #   double_ai —— 主模型只写叙事，回复后跑独立第二个 AI（run_update_pass）抽更新。2 次调用，
+    #                叙事/记账分离、对弱模型稳，但禁止内联标签（会拆掉标签+正则卡）。保留为可选。
+    # （ADR-0005 的单调用 tool 策略已移除。）
+    MVU_UPDATE_STRATEGY: str = "inline"
+
+    # 世界书 EJS 真 JS 求值（ADR-0021，**默认开**）：重逻辑 MVU 卡把游戏引擎写进世界书，
+    # 用 EJS 调真 JS + lodash（_.get / 箭头函数 / 数组方法）读 stat_data 动态裁剪 prompt。
+    # 开启时世界书 EJS 走 V8 沙箱（mini-racer）求值；mini-racer 未装 / 单条出错自动回退 v0
+    # ejs_engine（不 regress）。关掉则一律走 v0（撞到重逻辑卡会静默出错，见 ADR-0021）。
+    MVU_JS_EJS_ENABLED: bool = True
+
     # === 日志分文件（app/logging_setup.py）===
     # 按类别把业务日志分流到 LOG_DIR 下不同文件（prompt.log / output_contract.log /
     # app.log 兜底）。只读现有 logger 名 + 消息前缀，不改任何业务 log；控制台照旧全量。

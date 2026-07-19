@@ -17,6 +17,7 @@ slowapi>=0.1.9  # 登录 / 注册端点的 IP 限流
 chromadb>=0.5.0
 langgraph>=0.2.0
 langchain-core>=0.3.0
+mini-racer>=0.12  # V8 沙箱：世界书 EJS 真 JS 求值（MVU 重逻辑卡，_.get/箭头函数/数组方法，详见 ADR-0021）
 
 # === dev / test ===
 pytest>=8.0

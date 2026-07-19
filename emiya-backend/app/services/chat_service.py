@@ -47,8 +47,9 @@ def _build_mvu_browser_sync(final_state: dict) -> dict | None:
 
     仅当 `MVU_BROWSER_RUNTIME` 开 且 `persona_uses_mvu` 时返回 dict，否则 None。
     **必须在 node_post_process 应用之前调用** —— base_stat 要的是应用前的 S(N-1)。
-    ops 来源无关：inline `<UpdateVariable>` 在 raw_reply 里，tool 通道在 tool_calls 里，
-    前端薄 Mvu 层（ADR-0008b）自己解析+应用+派生。base_stat 深拷贝，避免后续 apply 改到它。
+    ops 来源无关：inline `<UpdateVariable>`（ADR-0022 默认）在 raw_reply 里，double_ai 在
+    double_ai_ops 里，前端薄 Mvu 层（ADR-0008b）自己解析+应用+派生。base_stat 深拷贝，避免后续
+    apply 改到它。（前端 applyTurn 的 tool_calls 形参保留但后端不再产出，恒为空。）
     """
     if not (settings.MVU_BROWSER_RUNTIME and final_state.get("persona_uses_mvu")):
         return None
@@ -57,7 +58,6 @@ def _build_mvu_browser_sync(final_state: dict) -> dict | None:
     return {
         "base_stat": copy.deepcopy(base_local.get("stat_data") or {}),
         "raw_reply": final_state.get("assistant_reply") or "",
-        "tool_calls": final_state.get("mvu_tool_calls") or [],
         "double_ai_ops": final_state.get("mvu_double_ai_ops") or [],
     }
 
@@ -184,7 +184,6 @@ async def process_chat(
         "error": None,
         "reply_length": reply_length,
         "mvu_scope": {},
-        "mvu_tool_calls": [],
         "mvu_double_ai_ops": [],
         "enabled_blocks": enabled_blocks,
         "mvu_compat_enabled": mvu_compat_enabled,
@@ -258,11 +257,16 @@ async def process_chat(
     buffer: list[str] = []
     chat_config = conversation.chat_config or {}
 
+    # ADR-0022b：MVU 卡的输出格式由卡自己定（内联标签 + 卡正则），EMIYA 输出契约对 MVU 卡冲突+冗余
+    # （会把 [系统]/[事件] 逻辑条目误判成尾部模板、指挥 AI 复述）→ MVU 激活时喂空条目 = 整体关掉契约
+    # （strict 判定 + 尾部执行都变 no-op；与 node_build_prompt 的锚定关闭一致）。
+    _wi_for_contract = [] if final_state.get("persona_uses_mvu") else final_state.get("wi_activated")
+
     # ADR-1g：strict 模式在生成前判定。可用时草稿不作为 message_delta 流式下发（改发
     # contract_stage 阶段事件），最终由 node_post_process 的确定性渲染经 message_done 一次
     # 性提交。strict 永不自动开启——只有账户/对话显式设为 strict 且启用前提满足才为真。
     _strict_contract = compile_contract(
-        final_state.get("wi_activated"), require_confirmed=_require_confirmed
+        _wi_for_contract, require_confirmed=_require_confirmed
     )
     strict_active = False
     if _strict_contract.required_sections:
@@ -290,9 +294,9 @@ async def process_chat(
     llm_frequency_penalty = chat_config.get("frequency_penalty")
     llm_presence_penalty = chat_config.get("presence_penalty")
 
-    # ADR-0005：tool-calling 更新通道（默认关；仅 uses_mvu 卡）。单次调用同时拿
-    # content + update_variables tool_call；tool_calls_acc 在流结束后被填充。
-    tool_calls_acc: list = []
+    # ADR-0022：MVU 更新策略元数据（仅供日志/诊断）。mode 由本轮 divert 标志决定：
+    # double_ai（回复后独立 pass）或 inline（主模型内联 <UpdateVariable>，无第二 pass）。
+    _is_double_ai = bool(final_state.get("mvu_divert_update"))
     wi_activated_for_tool = final_state.get("wi_activated") or []
     mvu_update_entry_count = sum(
         1
@@ -300,11 +304,8 @@ async def process_chat(
         if "[mvu_update]" in str((e or {}).get("comment") or "").lower()
     )
     mvu_tool_meta = {
-        "mode": "double_ai",
-        "enabled_flag": bool(final_state.get("persona_uses_mvu")),
+        "mode": "double_ai" if _is_double_ai else "inline",
         "persona_uses_mvu": bool(final_state.get("persona_uses_mvu")),
-        "tools_sent": False,
-        "tool_count": 0,
         "mvu_update_entries": mvu_update_entry_count,
         "tool_calls_received": 0,
         "tool_call_names": [],
@@ -312,13 +313,10 @@ async def process_chat(
     }
     final_state["mvu_tool_meta"] = mvu_tool_meta
     logger.info(
-        "[MVU-DOUBLE-AI] gate conv=%s enabled=%s persona_uses_mvu=%s "
-        "tools_sent=%s tool_count=%s mvu_update_entries=%s",
+        "[MVU-UPDATE] gate conv=%s mode=%s persona_uses_mvu=%s mvu_update_entries=%s",
         conversation_id,
-        mvu_tool_meta["enabled_flag"],
+        mvu_tool_meta["mode"],
         mvu_tool_meta["persona_uses_mvu"],
-        mvu_tool_meta["tools_sent"],
-        mvu_tool_meta["tool_count"],
         mvu_tool_meta["mvu_update_entries"],
     )
 
@@ -353,28 +351,19 @@ async def process_chat(
         yield f"event: error\ndata: {json.dumps(error_data, ensure_ascii=False)}\n\n"
         return
 
-    mvu_tool_meta["tool_calls_received"] = len(tool_calls_acc)
-    mvu_tool_meta["tool_call_names"] = [
-        str(((tc or {}).get("function") or {}).get("name") or "")
-        for tc in tool_calls_acc
-    ]
-    final_state["mvu_tool_meta"] = mvu_tool_meta
     logger.info(
-        "[MVU-ADR5] stream done conv=%s content_chunks=%s content_chars=%s "
-        "tool_calls=%s tool_call_names=%s",
+        "[MVU-UPDATE] stream done conv=%s content_chunks=%s content_chars=%s mode=%s",
         conversation_id,
         len(buffer),
         len("".join(buffer)),
-        mvu_tool_meta["tool_calls_received"],
-        mvu_tool_meta["tool_call_names"],
+        mvu_tool_meta["mode"],
     )
 
     final_state["assistant_reply"] = "".join(buffer)
-    final_state["mvu_tool_calls"] = tool_calls_acc
 
     logger.info(f"LLM 原始回复 (conv={conversation_id}):\n{final_state['assistant_reply']}")
 
-    if not buffer and not tool_calls_acc:
+    if not buffer:
         yield f"event: message_delta\ndata: {json.dumps({'content': '[没有收到回复]'}, ensure_ascii=False)}\n\n"
         yield f"event: message_done\ndata: {json.dumps({'message_id': '', 'conversation_id': str(conversation_id), 'new_memories': 0}, ensure_ascii=False)}\n\n"
         return
@@ -382,7 +371,7 @@ async def process_chat(
     # 5.5 尾部模板续写通过输出契约执行器统一处理。
     final_state["assistant_reply"] = "".join(buffer)
     output_contract = compile_contract(
-        final_state.get("wi_activated"),
+        _wi_for_contract,  # MVU 卡为空 → 契约整体关闭（ADR-0022b，见上）
         chat_config,
         require_confirmed=_require_confirmed,
     )
@@ -426,7 +415,9 @@ async def process_chat(
         yield delta
 
     # 6. 保存回复 + 后处理（情绪记录、关系更新、记忆提取）
-    if final_state.get("persona_uses_mvu") and (final_state.get("assistant_reply") or "").strip():
+    # ADR-0022：仅 double_ai 策略（mvu_divert_update）才跑独立更新 pass；inline 策略下
+    # 更新是主模型正文里的 <UpdateVariable>，由内联解析处理，不跑第二 pass。
+    if final_state.get("mvu_divert_update") and (final_state.get("assistant_reply") or "").strip():
         try:
             from app.services.mvu_runtime import run_update_pass
 

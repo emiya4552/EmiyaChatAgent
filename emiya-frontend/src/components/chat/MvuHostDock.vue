@@ -1,26 +1,26 @@
 <template>
   <!--
-    ADR-0008d 卡 UI 停靠栏。右侧可折叠面板，装浏览器 MVU Host 的可见 iframe（卡的浮动面板 /
-    世界书控制 / 手机终端渲染在里面）。容器 `mount` 在挂载时注册给 chat store，Host iframe 直接
-    建进这个容器（**建成后不可移动**，故容器需先于 Host 存在）。用 v-show（display:none）保持
-    容器常驻，卡 UI 不因显隐重载。仅当 chatStore.mvuHostActive（卡有可渲染 UI 且容器就绪）时显示。
+    ADR-0008d 卡 UI —— **覆盖式布局**（贴近 ST）。浏览器 MVU Host 的可见 iframe 铺满聊天区、
+    透明背景，卡的 position:fixed 浮层（悬浮球 / 世界书控制 / 飞讯手机终端）就能像在 ST 整窗里
+    一样铺开、随意拖曳。
+
+    穿透编排：iframe 默认 pointer-events:none（空白处点击/打字穿透给底下的聊天）。Host 上报卡 UI
+    元素的矩形；本组件用 document pointermove（pe:none 时）+ Host 回传的指针（pe:auto 时）做命中
+    检测，鼠标落到卡 UI 上才把 iframe 切成可点。容器 mount 常驻（v-show，不 v-if），iframe 建成后
+    不重载。
   -->
-  <div
-    v-show="chatStore.mvuHostActive"
-    :class="['mvu-host-dock', { collapsed }]"
-  >
-    <button class="mvu-dock-tab" :title="collapsed ? '展开卡界面' : '收起卡界面'" @click="collapsed = !collapsed">
-      <span class="chev">{{ collapsed ? '‹' : '›' }}</span>
-      <span v-if="collapsed" class="tab-label">卡界面</span>
-    </button>
-    <div class="mvu-dock-body">
-      <div class="mvu-dock-header">
-        <span class="title">卡界面</span>
-        <span class="hint">MVU Host</span>
-      </div>
+  <div v-show="chatStore.mvuHostActive" class="mvu-host-root">
+    <div v-show="enabled" ref="overlay" class="mvu-host-overlay">
       <!-- Host iframe 挂载点：常驻 DOM，勿用 v-if -->
       <div ref="mount" class="mvu-host-mount"></div>
     </div>
+    <button
+      class="mvu-host-toggle"
+      :title="enabled ? '隐藏卡界面浮层' : '显示卡界面浮层'"
+      @click="enabled = !enabled"
+    >
+      {{ enabled ? '隐藏卡界面' : '卡界面' }}
+    </button>
   </div>
 </template>
 
@@ -29,85 +29,91 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useChatStore } from '../../stores/chat'
 
 const chatStore = useChatStore()
+const overlay = ref<HTMLElement | null>(null)
 const mount = ref<HTMLElement | null>(null)
-const collapsed = ref(false)
+const enabled = ref(true)
 
-onMounted(() => { chatStore.registerMvuHostContainer(mount.value) })
-onBeforeUnmount(() => { chatStore.registerMvuHostContainer(null) })
+type Rect = { x: number; y: number; w: number; h: number }
+let rects: Rect[] = [] // Host 上报的卡 UI 矩形（iframe 视口坐标）
+
+function iframeEl(): HTMLIFrameElement | null {
+  return (mount.value?.querySelector('iframe') as HTMLIFrameElement) || null
+}
+function hit(ix: number, iy: number): boolean {
+  return rects.some((r) => ix >= r.x && ix <= r.x + r.w && iy >= r.y && iy <= r.y + r.h)
+}
+function setPe(over: boolean) {
+  const f = iframeEl()
+  if (f) f.style.pointerEvents = enabled.value && over ? 'auto' : 'none'
+}
+// Host → 父：卡 UI 矩形 + pe:auto 时的指针位置（父窗口据此判断何时切回穿透）。
+function onWinMsg(ev: MessageEvent) {
+  const d: any = ev.data
+  if (!d || d.__mvu == null) return
+  if (d.type === 'ui-rects') rects = Array.isArray(d.rects) ? d.rects : []
+  else if (d.type === 'host-pointer') setPe(hit(d.x, d.y)) // 已是 iframe 坐标
+}
+// pe:none 时鼠标事件走父窗口 document：换算成 iframe 坐标做命中，命中就切 pe:auto。
+function onDocMove(e: PointerEvent) {
+  if (!enabled.value || !chatStore.mvuHostActive) return
+  const ov = overlay.value?.getBoundingClientRect()
+  if (!ov) return
+  setPe(hit(e.clientX - ov.left, e.clientY - ov.top))
+}
+
+onMounted(() => {
+  chatStore.registerMvuHostContainer(mount.value)
+  window.addEventListener('message', onWinMsg)
+  document.addEventListener('pointermove', onDocMove, true)
+})
+onBeforeUnmount(() => {
+  chatStore.registerMvuHostContainer(null)
+  window.removeEventListener('message', onWinMsg)
+  document.removeEventListener('pointermove', onDocMove, true)
+})
 </script>
 
 <style scoped>
-.mvu-host-dock {
+/* 覆盖聊天区（ChatMain 相对容器内 inset:0），默认穿透，不挡聊天。 */
+.mvu-host-root {
   position: absolute;
-  top: 0;
-  right: 0;
-  height: 100%;
-  width: 380px;
-  max-width: 42vw;
+  inset: 0;
   z-index: 20;
-  display: flex;
-  transition: transform 0.22s ease;
-  pointer-events: none; /* 让 tab/body 各自接管，dock 空白区不挡聊天 */
+  pointer-events: none;
 }
-.mvu-host-dock.collapsed {
-  transform: translateX(calc(100% - 0px));
-}
-.mvu-dock-tab {
+.mvu-host-overlay {
   position: absolute;
-  left: -28px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 28px;
-  min-height: 64px;
-  padding: 8px 0;
-  border: 1px solid var(--n-border-color, #e0e0e6);
-  border-right: none;
-  border-radius: 8px 0 0 8px;
-  background: var(--n-color, #fff);
-  color: var(--n-text-color, #333);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  pointer-events: auto;
-  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.06);
+  inset: 0;
+  pointer-events: none; /* iframe 自身 pe 由脚本按命中切换 */
 }
-.mvu-dock-tab .chev { font-size: 18px; line-height: 1; }
-.mvu-dock-tab .tab-label { writing-mode: vertical-rl; font-size: 12px; letter-spacing: 2px; }
-.mvu-dock-body {
-  flex: 1;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--n-color, #fff);
-  border-left: 1px solid var(--n-border-color, #e0e0e6);
-  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
-  pointer-events: auto;
-  overflow: hidden;
-}
-.mvu-dock-header {
-  flex: 0 0 auto;
-  height: 40px;
-  padding: 0 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--n-border-color, #e0e0e6);
-  font-size: 13px;
-}
-.mvu-dock-header .title { font-weight: 600; }
-.mvu-dock-header .hint { font-size: 11px; opacity: 0.5; }
 .mvu-host-mount {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
-  overflow: auto;
+  position: absolute;
+  inset: 0;
 }
 .mvu-host-mount :deep(iframe) {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   border: 0;
-  display: block;
+  background: transparent;
 }
+/* 显隐开关：常驻可点，放**左下角**（避开头部短/中/长+设置按钮，也避开右下角发送键）。 */
+.mvu-host-toggle {
+  position: absolute;
+  bottom: 84px;
+  left: 16px;
+  z-index: 22;
+  pointer-events: auto;
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--n-border-color, #e0e0e6);
+  border-radius: 14px;
+  background: var(--n-color, #fff);
+  color: var(--n-text-color, #333);
+  cursor: pointer;
+  opacity: 0.6;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+.mvu-host-toggle:hover { opacity: 1; }
 </style>

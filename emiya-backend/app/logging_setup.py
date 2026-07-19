@@ -21,6 +21,8 @@ prompt 与 contract），会写进多个文件。
 - 提示词构成 → 用 PROMPT_PREFIXES 前缀开头。
 - 输出契约   → 放在 `app.services.output_contracts` 包内即自动归类；包外补写契约
               log 用 CONTRACT_PREFIXES 前缀。
+- MVU        → `mvu_runtime` 包 / `mvu_host` API 内自动归类；包外补写用 `[MVU...]` 前缀
+              （前端 Host 日志在浏览器 Console，见 `mvu-log.mjs`，不经此分流）。
 - 通用       → 用 `[核心]` 前缀；或 WARNING/ERROR 自动通用；无前缀的第三方/基础设施
               log 可把 logger 名加进 COMMON_LOGGER_NAMES 或关键词加进 COMMON_SUBSTRINGS。
 - 未匹配任何类别的 log 不会丢，落 app.log 兜底。改表即可，无需动业务代码。
@@ -53,6 +55,16 @@ CONTRACT_PREFIXES: tuple[str, ...] = (
 # logger 名以此开头的，整体归 contract（即使某条 log 没写前缀也归类）。
 CONTRACT_LOGGER_PREFIX = "app.services.output_contracts"
 
+# ── MVU（状态变量机 + 浏览器 Host 桥接）──────────────────────────────
+# mvu_runtime 包 + mvu_host API 整体归 mvu；包外补写 MVU log 用 [MVU...] 前缀
+# （[MVU-DOUBLE-AI] / [MVU-CAP] / [MVU_META_KEY] / [MVU-ADR5]… 均以 [MVU 开头，一网打尽）。
+# 前端 MVU Host 日志在**浏览器 Console**（前缀 [MVU]，见 mvu-log.mjs），不经本后端分流。
+MVU_PREFIXES: tuple[str, ...] = ("[MVU",)
+MVU_LOGGER_PREFIXES: tuple[str, ...] = (
+    "app.services.mvu_runtime",
+    "app.api.mvu_host",
+)
+
 # ── 通用（common）判定：无论开哪类都要出现 ─────────────────────────
 COMMON_PREFIXES: tuple[str, ...] = ("[核心]", "[COMMON]")
 # 这些 logger（及其子 logger）的所有 record 视为通用，例如 uvicorn 启动/生命周期。
@@ -69,6 +81,7 @@ COMMON_MIN_LEVEL = logging.WARNING
 CATEGORY_FILES: dict[str, str] = {
     "prompt": "prompt.log",
     "contract": "output_contract.log",
+    "mvu": "mvu.log",
 }
 FOCUS_CHOICES = ("all", *CATEGORY_FILES.keys())
 
@@ -97,6 +110,10 @@ def categories_of(record: logging.LogRecord) -> set[str]:
         cats.add("contract")
     if any(msg.startswith(p) for p in PROMPT_PREFIXES):
         cats.add("prompt")
+    if record.name.startswith(MVU_LOGGER_PREFIXES) or any(
+        msg.startswith(p) for p in MVU_PREFIXES
+    ):
+        cats.add("mvu")
     return cats
 
 

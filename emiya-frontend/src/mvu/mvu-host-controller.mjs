@@ -66,11 +66,12 @@ export class MvuHostController {
     }
   }
 
-  /** 载入卡脚本（schema/data/logic）。resolve 于 Host 回 'loaded'。*/
-  async loadCard(scripts) {
+  /** 载入卡脚本（schema/data/logic）。resolve 于 Host 回 'loaded'。
+   * `dangerous`：该对话是否开启危险能力——透给 Host 决定是否装假 ST 发送 DOM（卡驱动写入对话，ADR-0008d）。*/
+  async loadCard(scripts, { dangerous = false } = {}) {
     await this._ready
     const p = new Promise((resolve, reject) => this._loadWaiters.push({ resolve, reject }))
-    this._send({ __mvu: MVU_MSG, type: 'load', scripts: scripts || [] })
+    this._send({ __mvu: MVU_MSG, type: 'load', scripts: scripts || [], dangerous })
     return p
   }
 
@@ -107,7 +108,10 @@ export function buildHostDoc(bundleSrc) {
   // 防御性转义：内联脚本里若含 `</script>` 会提前闭合。Host 源码目前不含，转义仅为兜底。
   const safe = String(bundleSrc).replace(/<\/script>/gi, '<\\/script>')
   // TODO(0008b)：加 <meta http-equiv="Content-Security-Policy"> 锁 connect-src 到自托 Vendored Stack。
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>MVU Host</title></head>`
+  // 覆盖式布局（ADR-0008d）:html/body 透明 + 无边距，让 iframe 铺满聊天区时能看穿到底下的聊天；
+  // 卡 UI 的 position:fixed 浮层照常显示，空白处透明。
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>MVU Host</title>`
+    + `<style>html,body{margin:0;padding:0;background:transparent!important}</style></head>`
     + `<body><script>${safe}</script></body></html>`
 }
 
@@ -129,11 +133,15 @@ export function createIframeHost(_hostUrl, { sandbox = 'allow-scripts', parent =
   const iframe = document.createElement('iframe')
   iframe.setAttribute('sandbox', sandbox)
   if (visible) {
-    // UI 阶段：填满停靠栏容器；样式隔离由沙箱 iframe 天然提供。
+    // UI 阶段（覆盖式布局 ADR-0008d）:填满覆盖容器、透明背景、默认 pointer-events:none
+    // （空白处穿透给聊天）；MvuHostDock 按 Host 上报的卡 UI 矩形动态切成 auto 让卡 UI 可点/可拖。
     iframe.style.width = '100%'
     iframe.style.height = '100%'
     iframe.style.border = '0'
     iframe.style.display = 'block'
+    iframe.style.background = 'transparent'
+    iframe.style.pointerEvents = 'none'
+    iframe.setAttribute('allowtransparency', 'true')
   } else {
     iframe.style.display = 'none' // 状态阶段无头
   }

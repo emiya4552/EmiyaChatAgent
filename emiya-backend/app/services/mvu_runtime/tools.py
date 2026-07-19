@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""MVU tool-calling 更新通道（ADR-0005）。
+"""MVU `update_variables` 工具定义 + tool_call 抽取。
+
+原为 ADR-0005 的单调用 tool 更新策略；该策略已随 ADR-0022 移除。本模块现**仅服务
+double_ai 更新策略**（`mvu_runtime.update_pass.run_update_pass` 用它构造工具、抽取 patch）。
+inline 策略（ADR-0022 默认）不经这里——更新是主模型正文里的 `<UpdateVariable>`，由
+`message_pipeline` 内联解析。
 
 `update_variables` 工具：参数是**通用 JSON Patch 数组**（op/path/value），卡专属的
 路径/取值规则放进 tool description（由本轮激活的 `[mvu_update]` 条目内容拼成）。

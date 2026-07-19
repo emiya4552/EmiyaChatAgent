@@ -278,12 +278,30 @@ def build_initial_state(
         compatibility: card-level report
     """
     warnings: list[str] = []
+    scripts = _tavern_helper_scripts(card_data)
     schema_defaults: dict[str, Any] = {}
-    for script in _tavern_helper_scripts(card_data):
-        content = script.get("content") or ""
-        defaults, script_warnings = _extract_static_schema_defaults(content)
-        schema_defaults = _merge_override(schema_defaults, defaults)
-        warnings.extend(script_warnings)
+
+    # ADR-0021（延伸）：优先在 V8 沙箱里**真跑卡的 zod schema**，`Schema.parse({})` 拿到完整、正确嵌套
+    # 的默认 stat_data（支持 .prefault / preprocess / record / 根写法等行正则搞不定的形态）。不可用 /
+    # 无 schema / 失败 → 回退下方行正则 `_extract_static_schema_defaults`（不 regress）。
+    try:
+        from app.config import settings
+
+        if getattr(settings, "MVU_JS_EJS_ENABLED", True):
+            from app.services.mvu_runtime import schema_eval
+
+            v8_defaults = schema_eval.extract_defaults(scripts)
+            if isinstance(v8_defaults, dict) and v8_defaults:
+                schema_defaults = v8_defaults
+    except Exception as exc:  # pragma: no cover - 边界防御，永不因 schema 求值中断建对话
+        warnings.append(f"V8 schema 求值异常，回退行正则: {exc}")
+
+    if not schema_defaults:
+        for script in scripts:
+            content = script.get("content") or ""
+            defaults, script_warnings = _extract_static_schema_defaults(content)
+            schema_defaults = _merge_override(schema_defaults, defaults)
+            warnings.extend(script_warnings)
 
     entry_sources: list[InitialSource] = []
     entries = _iter_character_book_entries(card_data) + _worldbook_entries(worldbooks)

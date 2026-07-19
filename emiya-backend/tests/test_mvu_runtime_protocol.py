@@ -132,6 +132,34 @@ def test_mvu_policy_scope_keeps_names_when_compat_disabled():
     assert scope["names"] == {"user": "用户名", "char": "角色名"}
 
 
+def test_mvu_scope_provides_initialized_lorebooks_when_active():
+    # MVU 激活时 local 桶镜像 MVU 数据结构 { stat_data, initialized_lorebooks }——部分卡条目
+    # （如创角模板）门控在 `getvar('initialized_lorebooks') !== undefined` 上，缺它则永不渲染。
+    policy = build_mvu_policy(persona_uses_mvu=True, compat_enabled=True)
+    scope = build_macro_scope(
+        policy=policy,
+        conversation_variables={"stat_data": {"hp": 1}},
+        user_global_variables={},
+        user_name="U",
+        char_name="C",
+    )
+    assert scope["local"]["stat_data"] == {"hp": 1}
+    assert scope["local"]["initialized_lorebooks"] == {}  # 已定义（!= undefined）
+
+
+def test_mvu_scope_preserves_existing_initialized_lorebooks():
+    # 前端 Host UP 回传的 initialized_lorebooks 不被覆盖。
+    policy = build_mvu_policy(persona_uses_mvu=True, compat_enabled=True)
+    scope = build_macro_scope(
+        policy=policy,
+        conversation_variables={"stat_data": {}, "initialized_lorebooks": {"魔法少女": True}},
+        user_global_variables={},
+        user_name="U",
+        char_name="C",
+    )
+    assert scope["local"]["initialized_lorebooks"] == {"魔法少女": True}
+
+
 def test_prompt_renderer_can_disable_ejs_without_disabling_name_macros():
     block = PromptBlock(
         id="static",
@@ -160,12 +188,21 @@ def test_mvu_worldbook_policy_filters_prompt_entries():
         {"comment": "ordinary lore", "content": "lore"},
     ]
 
-    active = build_mvu_policy(persona_uses_mvu=True, compat_enabled=True)
+    active_inline = build_mvu_policy(persona_uses_mvu=True, compat_enabled=True)  # ADR-0022 默认 inline
+    active_double_ai = build_mvu_policy(
+        persona_uses_mvu=True, compat_enabled=True, update_strategy="double_ai"
+    )
     disabled = build_mvu_policy(persona_uses_mvu=True, compat_enabled=False)
 
+    # inline（默认）：[mvu_update] 规则留在 prompt，供主模型照规则内联输出 <UpdateVariable>
     assert [
-        e["content"] for e in filter_worldbook_entries_for_prompt(entries, active)
+        e["content"] for e in filter_worldbook_entries_for_prompt(entries, active_inline)
+    ] == ["update", "status", "lore"]
+    # double_ai：更新交回复后独立 pass，[mvu_update] 从主 prompt 摘掉
+    assert [
+        e["content"] for e in filter_worldbook_entries_for_prompt(entries, active_double_ai)
     ] == ["status", "lore"]
+    # 兼容关：MVU 卡当普通卡，剥掉所有 MVU 标签条目
     assert [
         e["content"] for e in filter_worldbook_entries_for_prompt(entries, disabled)
     ] == ["lore"]
@@ -400,18 +437,16 @@ def test_build_runtime_view_includes_update_tool_meta():
         update_diag={"applied": 0, "dropped": [], "coerced": [], "clamped": []},
         update_channel="none",
         update_meta={
-            "enabled_flag": True,
+            "mode": "double_ai",
             "persona_uses_mvu": True,
-            "tools_sent": True,
-            "tool_count": 1,
             "mvu_update_entries": 1,
             "tool_calls_received": 0,
             "tool_call_names": [],
         },
     )
 
-    assert view["update"]["meta"]["enabled_flag"] is True
-    assert view["update"]["meta"]["tools_sent"] is True
+    assert view["update"]["meta"]["mode"] == "double_ai"
+    assert view["update"]["meta"]["persona_uses_mvu"] is True
     assert view["update"]["meta"]["tool_calls_received"] == 0
     assert any("tool_calls=0" in d for d in view["diagnostics"])
 

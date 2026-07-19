@@ -84,8 +84,9 @@ def test_adr6_real_lireng_round_applies_and_validates():
     print("\n[ADR-0006 E2E] 应用后 伶伶 =", ll, "\n诊断 =", diag)
 
 
-def test_adr6_tool_mode_filter_keeps_desc_and_directive():
-    from app.services.langgraph.nodes import _MVU_TOOL_DIRECTIVE
+def test_double_ai_tool_builder_keeps_update_rules_in_description():
+    # ADR-0022：单调用 tool 更新策略已移除；build_update_variables_tool 现仅供 double_ai
+    # 更新 pass 用（run_update_pass）。这里验证 double_ai 分流 + tool description 拼装仍正确。
     from app.services.mvu_runtime.runtime_view import classify_mvu_comment
     from app.services.mvu_runtime.tools import build_update_variables_tool
 
@@ -94,14 +95,11 @@ def test_adr6_tool_mode_filter_keeps_desc_and_directive():
         {"comment": "[mvu_status]变量列表", "content": "S"},
         {"comment": "♀️琳奈 [Pro]", "content": "P"},
     ]
-    # node_build_prompt 的注入过滤谓词：tool 模式下摘掉 [mvu_update]
+    # double_ai 分流：注入 prompt 时摘掉 [mvu_update]（更新交回复后的独立 pass）
     injected = [e for e in wi if classify_mvu_comment(e.get("comment")) != "update"]
     assert [e["comment"] for e in injected] == ["[mvu_status]变量列表", "♀️琳奈 [Pro]"]
 
-    # 但 [mvu_update] 内容仍进 tool description（wi_activated 不动）
+    # 但 [mvu_update] 内容仍进 double_ai 的 update_variables tool description
     tool = build_update_variables_tool(wi)
     assert "RULES_R" in tool["function"]["description"]
-
-    # 引导文案：让模型调用工具、别写文本
-    assert "update_variables" in _MVU_TOOL_DIRECTIVE
-    assert "UpdateVariable" in _MVU_TOOL_DIRECTIVE
+    assert tool["function"]["name"] == "update_variables"

@@ -8,6 +8,7 @@ import { createBridge, MVU_MSG, prepareCardCode, stripModuleSyntax } from './mvu
 import { MvuHostController } from './mvu-host-controller.mjs'
 import { MvuHostSession } from './mvu-host-session.mjs'
 import { classifyCapability, resolveCapability, makeCapabilityHandler } from './mvu-capabilities.mjs'
+import { installTavernHelperApi } from './th-api.mjs'
 
 const tick = () => new Promise((r) => setTimeout(r))
 
@@ -161,6 +162,21 @@ describe('MvuHostController 透传 double_ai_ops（断点回归）', () => {
   })
 })
 
+describe('MvuHostController loadCard 透传 dangerous（卡驱动写入对话门控）', () => {
+  it('loadCard 把 dangerous 写进 load 消息；缺省 false', async () => {
+    const sent = []
+    const c = new MvuHostController({ send: (m) => sent.push(m) })
+    c.onMessage({ __mvu: MVU_MSG, type: 'ready' })
+    await c.ready()
+    void c.loadCard([{ name: 's', code: 'x', kind: 'logic' }], { dangerous: true })
+    await tick() // loadCard 先 await this._ready 再 _send，等微任务冲刷
+    expect(sent.at(-1)).toMatchObject({ type: 'load', dangerous: true })
+    void c.loadCard([]) // 缺省
+    await tick()
+    expect(sent.at(-1)).toMatchObject({ type: 'load', dangerous: false })
+  })
+})
+
 describe('MvuHostController correlation', () => {
   it('ready/load/apply 按 id 对应，error/dispose 拒绝', async () => {
     const sent = []
@@ -211,6 +227,7 @@ describe('ADR-0008d 能力限权', () => {
     expect(classifyCapability('setChatMessages')).toBe('dangerous')
     expect(classifyCapability('createChatMessages')).toBe('dangerous')
     expect(classifyCapability('deleteChatMessages')).toBe('dangerous')
+    expect(classifyCapability('sendMessage')).toBe('dangerous') // 卡驱动写入对话
     expect(classifyCapability('getWorldbook')).toBe('read')
     expect(classifyCapability('getChatMessages')).toBe('read') // ADR-0008d：读会话楼层
     expect(classifyCapability('getVariables', { type: 'global' })).toBe('read')
@@ -222,6 +239,8 @@ describe('ADR-0008d 能力限权', () => {
     expect(resolveCapability('generateRaw').allow).toBe(false)
     expect(resolveCapability('getWorldbook').allow).toBe(true)
     expect(resolveCapability('generateRaw', { dangerous: true }).allow).toBe(true)
+    expect(resolveCapability('sendMessage').allow).toBe(false) // 卡发消息默认拒
+    expect(resolveCapability('sendMessage', { dangerous: true }).allow).toBe(true) // 对话 opt-in 放行
     expect(resolveCapability('getWorldbook', { read: false }).allow).toBe(false)
     expect(resolveCapability('unknownCap').allow).toBe(false)
   })
@@ -318,5 +337,28 @@ describe('ADR-0008d 能力限权', () => {
     const r = await sess.init(FIXTURE_CARD)
     expect(r.scripts.some((s) => s.kind === 'ui')).toBe(true) // includeUi 生效
     expect(gotOpts.capabilityHandler).toBe(capH) // handler 透传给 factory
+  })
+})
+
+describe('th-api: 卡驱动"写入对话" triggerSlash /send → sendMessage 能力', () => {
+  it('/send <文本> 路由到 sendMessage 能力；非 /send 与空 /send 不发', async () => {
+    const calls = []
+    const requestCap = (cap, args) => { calls.push([cap, args]); return Promise.resolve('') }
+    const win = {}
+    installTavernHelperApi(win, { requestCap })
+
+    await win.triggerSlash('/send 你好世界')
+    expect(calls).toEqual([['sendMessage', { text: '你好世界' }]])
+
+    calls.length = 0
+    await win.triggerSlash('/echo x') // 其余 slash：安全降级，不发消息
+    await win.triggerSlash('/send   ') // 空 /send：不发
+    expect(calls).toEqual([])
+  })
+
+  it('/send 被拒时传播 rejection（不静默假成功，让卡走降级）', async () => {
+    const win = {}
+    installTavernHelperApi(win, { requestCap: () => Promise.reject(new Error('dangerous default-denied')) })
+    await expect(win.triggerSlash('/send hi')).rejects.toThrow(/default-denied/)
   })
 })

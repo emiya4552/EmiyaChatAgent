@@ -13,7 +13,6 @@ def _state(**over):
         "persona_uses_mvu": True,
         "mvu_scope": {"local": {"stat_data": {"伶伶": {"当前好感度": 15}}}},
         "assistant_reply": "旁白……<UpdateVariable>[{\"op\":\"delta\",\"path\":\"/伶伶/当前好感度\",\"value\":2}]</UpdateVariable>",
-        "mvu_tool_calls": [],
     }
     st.update(over)
     return st
@@ -34,8 +33,10 @@ def test_on_and_uses_mvu_carries_layer1_material(monkeypatch):
     sync = _build_mvu_browser_sync(_state())
     assert sync is not None
     assert sync["base_stat"] == {"伶伶": {"当前好感度": 15}}
+    # inline 策略（ADR-0022 默认）：更新在 raw_reply 的 <UpdateVariable> 里，前端薄 Mvu 自解析。
     assert "<UpdateVariable>" in sync["raw_reply"]
-    assert sync["tool_calls"] == []
+    assert sync["double_ai_ops"] == []
+    assert "tool_calls" not in sync  # ADR-0022：tool 策略移除，payload 不再带 tool_calls
 
 
 def test_base_stat_is_deep_copied(monkeypatch):
@@ -50,9 +51,9 @@ def test_base_stat_is_deep_copied(monkeypatch):
 
 def test_missing_mvu_scope_is_safe(monkeypatch):
     monkeypatch.setattr(settings, "MVU_BROWSER_RUNTIME", True)
-    sync = _build_mvu_browser_sync(_state(mvu_scope=None, mvu_tool_calls=None))
+    sync = _build_mvu_browser_sync(_state(mvu_scope=None))
     assert sync["base_stat"] == {}
-    assert sync["tool_calls"] == []
+    assert sync["double_ai_ops"] == []
 
 
 # ── ADR-0008c 阶段3：退役后端 apply 门控 ──
