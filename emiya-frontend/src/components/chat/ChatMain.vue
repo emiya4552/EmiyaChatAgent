@@ -386,8 +386,8 @@ function handleStop() {
   margin: 0 20px 8px;
   padding: 6px 12px;
   font-size: 13px;
-  color: #2563eb;
-  background: rgba(37, 99, 235, 0.1);
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
   border-radius: 8px;
   text-align: center;
 }
@@ -510,7 +510,7 @@ function handleStop() {
   width: 520px;
   max-height: 80vh;
   overflow-y: auto;
-  background: #fff;
+  background: var(--color-bg-surface);
   border-radius: 12px;
   padding: 24px;
 }

@@ -1,14 +1,11 @@
 <template>
   <PageShell maxWidth="900px">
-    <div class="page-header">
-      <n-button text @click="$router.push('/templates')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回
-      </n-button>
-      <h2 class="page-title">
-        {{ isReadOnly ? '查看：系统默认（内置）' : (isEdit ? '编辑模板' : '新建模板') }}
-      </h2>
-    </div>
+    <WorkspaceHeader
+      eyebrow="创作资产"
+      :title="isReadOnly ? '查看：系统默认（内置）' : (isEdit ? '编辑模板' : '新建模板')"
+      backTo="/templates"
+      backLabel="所有模板"
+    />
 
     <n-alert v-if="isReadOnly" type="warning" class="readonly-banner" :show-icon="true">
       此为系统内置默认模板，随版本更新；不可编辑。要个性化，请去模板列表点"复制为我的模板"。
@@ -156,6 +153,7 @@ import {
 } from 'naive-ui'
 import { ArrowBack, ChevronUp, ChevronDown, Close } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { fetchTemplate, createTemplate, updateTemplate, fetchDefaultPreview } from '../api/template'
 import type { PromptBlock, TemplateDetail } from '../types'
 

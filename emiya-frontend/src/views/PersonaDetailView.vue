@@ -1,18 +1,20 @@
 <template>
   <PageShell maxWidth="720px">
-    <div class="page-header">
-      <n-button text @click="$router.back()">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回
-      </n-button>
-      <h2 class="page-title">{{ persona?.name || '加载中...' }}</h2>
-      <n-button v-if="persona && !persona.is_template" size="small" @click="$router.push(`/personas/${persona.id}/edit`)">
-        编辑
-      </n-button>
-      <n-button v-if="persona" size="small" type="info" @click="onExport">
-        导出 PNG
-      </n-button>
-    </div>
+    <WorkspaceHeader
+      eyebrow="角色卡"
+      :title="persona?.name || '加载中...'"
+      backTo="/personas"
+      backLabel="所有角色"
+    >
+      <template #actions>
+        <n-button v-if="persona && !persona.is_template" @click="$router.push(`/personas/${persona.id}/edit`)">
+          编辑
+        </n-button>
+        <n-button v-if="persona" type="primary" @click="onExport">
+          导出 PNG
+        </n-button>
+      </template>
+    </WorkspaceHeader>
 
     <n-spin :show="loading">
       <template v-if="persona">
@@ -114,7 +116,7 @@
         <n-card v-if="relationship" title="你和 TA" class="detail-card relationship-card">
           <div class="rel-main">
             <span class="rel-level">{{ relationship.level_name }}</span>
-            <n-progress type="line" :percentage="relationship.affinity_score" :height="8" :show-indicator="false" color="#7c5cfc" rail-color="#f0e8ff" style="flex:1; max-width: 200px;" />
+            <n-progress type="line" :percentage="relationship.affinity_score" :height="8" :show-indicator="false" color="#a86252" rail-color="#eadccf" style="flex:1; max-width: 200px;" />
             <span class="rel-score">{{ Math.round(relationship.affinity_score) }}%</span>
           </div>
           <div class="rel-meta">
@@ -168,6 +170,7 @@ import {
 } from 'naive-ui'
 import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { fetchPersonaDetail, exportPersonaUrl } from '../api/persona'
 import { fetchRelationship } from '../api/relationship'
 import type { PersonaDetail, Relationship } from '../types'
@@ -271,8 +274,8 @@ function onExport() {
 }
 .relationship-card { background: linear-gradient(135deg, #faf8ff, #f5f0ff); }
 .rel-main { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.rel-level { font-size: 18px; font-weight: 600; color: #7c5cfc; }
-.rel-score { font-size: 14px; color: #7c5cfc; font-weight: 600; }
+.rel-level { font-size: 18px; font-weight: 600; color: #a86252; }
+.rel-score { font-size: 14px; color: #a86252; font-weight: 600; }
 .rel-meta { display: flex; gap: 8px; font-size: 13px; color: #888; margin-bottom: 8px; }
 .rel-milestones { display: flex; flex-wrap: wrap; gap: 4px; }
 

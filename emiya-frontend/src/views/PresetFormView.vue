@@ -1,12 +1,11 @@
 <template>
   <PageShell maxWidth="800px">
-    <div class="page-header">
-      <n-button text @click="$router.push('/presets')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回
-      </n-button>
-      <h2 class="page-title">{{ isEdit ? `编辑「${form.name || '...'}」` : '新建预设' }}</h2>
-    </div>
+    <WorkspaceHeader
+      eyebrow="创作资产"
+      :title="isEdit ? `编辑「${form.name || '...'}」` : '新建预设'"
+      backTo="/presets"
+      backLabel="所有预设"
+    />
 
     <div class="form-wrapper">
       <n-spin :show="loadingForm">
@@ -152,6 +151,7 @@ import {
 } from 'naive-ui'
 import { ArrowBack, ChevronUp, ChevronDown, CreateOutline } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { fetchPresetDetail, updatePreset, createPreset } from '../api/preset'
 import type { PromptEntry } from '../types'
 

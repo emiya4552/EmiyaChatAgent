@@ -1,13 +1,10 @@
 <template>
   <PageShell>
-    <div class="page-header">
-      <n-button text @click="$router.push('/chat')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回聊天
-      </n-button>
-      <h2 class="page-title">Prompt 模板</h2>
-      <n-button type="primary" @click="$router.push('/templates/new')">新建模板</n-button>
-    </div>
+    <WorkspaceHeader eyebrow="创作资产" title="Prompt 模板" description="管理组装最终 Prompt 的区块模板。">
+      <template #actions>
+        <n-button type="primary" @click="$router.push('/templates/new')">+ 新建模板</n-button>
+      </template>
+    </WorkspaceHeader>
 
     <div class="page-content">
       <n-spin :show="loading">
@@ -71,6 +68,7 @@ import { useRouter } from 'vue-router'
 import { NButton, NIcon, NTag, NSpin, NPopconfirm, useMessage } from 'naive-ui'
 import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import {
   fetchTemplates, deleteTemplate, duplicateTemplate,
   fetchDefaultPreview, createTemplate,

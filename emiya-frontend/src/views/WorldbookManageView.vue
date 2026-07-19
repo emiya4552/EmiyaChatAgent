@@ -1,18 +1,15 @@
 <template>
   <PageShell>
-    <div class="page-header">
-      <n-button text @click="$router.push('/chat')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回聊天
-      </n-button>
-      <h2 class="page-title">世界书管理</h2>
-      <n-button type="primary" @click="createBlank">+ 新建</n-button>
-      <n-button type="primary" @click="triggerImport">
-        <template #icon><n-icon><DownloadOutline /></n-icon></template>
-        导入
-      </n-button>
-      <input ref="fileInputRef" type="file" accept=".json" style="display: none" @change="onImportFile" />
-    </div>
+    <WorkspaceHeader eyebrow="创作资产" title="世界书" description="管理可复用的世界观设定条目。">
+      <template #actions>
+        <n-button @click="triggerImport">
+          <template #icon><n-icon><DownloadOutline /></n-icon></template>
+          导入
+        </n-button>
+        <n-button type="primary" @click="createBlank">+ 新建世界书</n-button>
+      </template>
+    </WorkspaceHeader>
+    <input ref="fileInputRef" type="file" accept=".json" style="display: none" @change="onImportFile" />
 
     <div class="page-content">
       <n-spin :show="loading">
@@ -71,6 +68,7 @@ import { useRouter } from 'vue-router'
 import { NButton, NIcon, NSpin, NEmpty, NTag, NPopconfirm, useMessage } from 'naive-ui'
 import { ArrowBack, DownloadOutline } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import {
   fetchWorldbooks, deleteWorldbook, importWorldbook,
   createWorldbook, exportWorldbook,

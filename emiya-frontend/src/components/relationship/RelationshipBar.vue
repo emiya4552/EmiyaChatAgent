@@ -9,8 +9,8 @@
       :percentage="levelProgress"
       :height="6"
       :show-indicator="false"
-      color="#7c5cfc"
-      rail-color="#e8e0ff"
+      color="#a86252"
+      rail-color="#eadccf"
     />
     <span class="rel-score">{{ scoreText }}</span>
 

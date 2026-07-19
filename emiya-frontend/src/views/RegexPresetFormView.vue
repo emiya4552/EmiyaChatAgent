@@ -1,13 +1,15 @@
 <template>
   <PageShell>
-    <div class="page-header">
-      <n-button text @click="$router.push('/regex-presets')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回
-      </n-button>
-      <h2 class="page-title">{{ isEdit ? '编辑正则预设' : '新建正则预设' }}</h2>
-      <n-button type="primary" :loading="saving" @click="handleSave">保存</n-button>
-    </div>
+    <WorkspaceHeader
+      eyebrow="创作资产"
+      :title="isEdit ? '编辑正则预设' : '新建正则预设'"
+      backTo="/regex-presets"
+      backLabel="所有正则预设"
+    >
+      <template #actions>
+        <n-button type="primary" :loading="saving" @click="handleSave">保存</n-button>
+      </template>
+    </WorkspaceHeader>
 
     <div class="page-content">
       <div class="form-section">
@@ -93,6 +95,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { NButton, NIcon, NInput, NSwitch, NEmpty, NPopover, useMessage } from 'naive-ui'
 import { ArrowBack, TrashOutline, HelpCircleOutline } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { fetchRegexPresetDetail, createRegexPreset, updateRegexPreset } from '../api/regexPreset'
 
 const route = useRoute()

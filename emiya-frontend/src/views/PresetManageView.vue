@@ -1,20 +1,15 @@
 <template>
   <PageShell>
-    <div class="page-header">
-      <n-button text @click="$router.push('/chat')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回聊天
-      </n-button>
-      <h2 class="page-title">预设管理</h2>
-      <n-button type="primary" @click="$router.push('/presets/create')">
-        + 新建
-      </n-button>
-      <n-button type="primary" @click="triggerImport">
-        <template #icon><n-icon><DownloadOutline /></n-icon></template>
-        导入预设
-      </n-button>
-      <input ref="fileInputRef" type="file" accept=".json" style="display: none" @change="onImportFile" />
-    </div>
+    <WorkspaceHeader eyebrow="创作资产" title="预设" description="管理采样参数与 Prompt 组合预设。">
+      <template #actions>
+        <n-button @click="triggerImport">
+          <template #icon><n-icon><DownloadOutline /></n-icon></template>
+          导入预设
+        </n-button>
+        <n-button type="primary" @click="$router.push('/presets/create')">+ 新建预设</n-button>
+      </template>
+    </WorkspaceHeader>
+    <input ref="fileInputRef" type="file" accept=".json" style="display: none" @change="onImportFile" />
 
     <div class="page-content">
       <n-spin :show="loading">
@@ -65,6 +60,7 @@ import { ref, onMounted } from 'vue'
 import { NButton, NIcon, NSpin, NEmpty, NTag, NPopconfirm, useMessage } from 'naive-ui'
 import { ArrowBack, DownloadOutline } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { fetchPresets, deletePreset, importPreset } from '../api/preset'
 import type { PresetInfo } from '../types'
 

@@ -1,15 +1,9 @@
 <template>
   <PageShell max-width="720px">
     <div class="settings-page">
-      <div class="page-header">
-        <n-button text @click="router.back()">
-          <template #icon><n-icon><ArrowBackOutline /></n-icon></template>
-          返回
-        </n-button>
-        <h1 class="page-title">账户设置</h1>
-      </div>
+      <WorkspaceHeader eyebrow="账户" title="账户设置" description="管理资料、显示偏好、记忆预算与登录安全。" />
 
-      <n-tabs type="line" animated>
+      <n-tabs class="settings-tabs" type="line" animated :value="activeTab" @update:value="onTabChange">
         <!-- ───── Tab 1: 资料 ───── -->
         <n-tab-pane name="profile" tab="资料">
           <div class="section">
@@ -458,7 +452,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import {
   NButton, NCollapse, NCollapseItem, NDivider, NForm, NFormItem, NIcon, NInput,
   NInputNumber, NSelect, NSwitch, NTabPane, NTag, NTabs, NUpload, useDialog, useMessage,
@@ -485,12 +479,25 @@ import {
 } from '../api/user'
 import { avatarColor } from '../utils/avatar'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import type { UserSession } from '../types'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const message = useMessage()
 const dialog = useDialog()
+
+// 分区由顶部账户副导航经 ?tab= 驱动;本页内部 n-tabs 的标签栏已隐藏(见样式),
+// 只用它切换面板内容,active 分区跟随 URL query。
+const SETTINGS_TABS = ['profile', 'display', 'advanced', 'security', 'sessions', 'danger']
+const activeTab = computed(() => {
+  const t = route.query.tab
+  return typeof t === 'string' && SETTINGS_TABS.includes(t) ? t : 'profile'
+})
+function onTabChange(name: string) {
+  router.replace({ query: { ...route.query, tab: name } })
+}
 
 const user = computed(() => authStore.user)
 const avatarUrl = computed(() => user.value?.avatar_url || null)
@@ -929,6 +936,8 @@ async function doDeleteAccount() {
 
 <style scoped>
 .settings-page { padding-bottom: 60px; }
+/* 分区切换改由顶部账户副导航承担,隐藏 n-tabs 自带的标签栏(仅保留面板内容)。 */
+.settings-tabs :deep(.n-tabs-nav) { display: none; }
 .page-header {
   display: flex;
   align-items: center;

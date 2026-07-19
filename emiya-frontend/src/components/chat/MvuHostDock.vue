@@ -107,13 +107,13 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   padding: 4px 10px;
   font-size: 12px;
-  border: 1px solid var(--n-border-color, #e0e0e6);
+  border: 1px solid var(--color-border);
   border-radius: 14px;
-  background: var(--n-color, #fff);
-  color: var(--n-text-color, #333);
+  background: var(--color-bg-surface);
+  color: var(--color-text);
   cursor: pointer;
   opacity: 0.6;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-sm);
 }
 .mvu-host-toggle:hover { opacity: 1; }
 </style>

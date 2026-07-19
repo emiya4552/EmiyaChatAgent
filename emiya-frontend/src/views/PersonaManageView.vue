@@ -1,23 +1,24 @@
 <template>
   <PageShell>
-    <div class="page-header">
-      <n-button text @click="$router.push('/chat')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回聊天
-      </n-button>
-      <h2 class="page-title">角色卡管理</h2>
-      <n-button type="primary" @click="showImport = true">
-        <template #icon><n-icon><DownloadOutline /></n-icon></template>
-        导入角色卡
-      </n-button>
-      <n-button
-        type="primary"
-        :disabled="customCount >= 50"
-        @click="$router.push('/personas/create')"
-      >
-        + 新建
-      </n-button>
-    </div>
+    <WorkspaceHeader
+      eyebrow="创作资产"
+      title="角色卡"
+      description="导入、创建并管理你的角色卡。"
+    >
+      <template #actions>
+        <n-button @click="showImport = true">
+          <template #icon><n-icon><DownloadOutline /></n-icon></template>
+          导入
+        </n-button>
+        <n-button
+          type="primary"
+          :disabled="customCount >= 50"
+          @click="$router.push('/personas/create')"
+        >
+          + 新建角色
+        </n-button>
+      </template>
+    </WorkspaceHeader>
 
     <div class="page-content">
       <n-spin :show="loading">
@@ -162,8 +163,9 @@ import {
   NUpload, NUploadDragger, NInput, NSpace, NDivider, NForm, NFormItem, NAlert,
   useMessage,
 } from 'naive-ui'
-import { ArrowBack, DownloadOutline, CloudUploadOutline } from '@vicons/ionicons5'
+import { DownloadOutline, CloudUploadOutline } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { avatarColor } from '../utils/avatar'
 import { fetchPersonas, deletePersona, importParse, importConfirm } from '../api/persona'
 import type { PersonaListItem, ImportParseResult } from '../types'
@@ -276,13 +278,6 @@ async function onConfirmImport() {
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-.page-title { flex: 1; margin: 0; font-size: 20px; white-space: nowrap; }
 .page-content { min-height: 200px; }
 .persona-list { display: flex; flex-direction: column; gap: 12px; }
 .persona-card {
