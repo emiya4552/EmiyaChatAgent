@@ -99,6 +99,16 @@
 
     <!-- ADR-0008d：卡 UI 右侧可折叠停靠栏（仅当卡有可渲染 UI 时显示） -->
     <MvuHostDock />
+
+    <!-- ADR-0012 卡驱动"写入对话"：消息 HTML 在**同源**（无 sandbox）srcdoc iframe 里跑（见
+         useHtmlIframeRender）。有些卡（角色创建自动开场、快速选项）靠 `window.parent.document` 找 ST 的
+         `#send_textarea`/`#send_but` 自动发送。EMIYA 主 DOM 没这套 → 卡报 "SillyTavern UI not found" →
+         退剪贴板。这里放一套**隐藏的等价发送 DOM**（卡设值+点 `#send_but` → 走 EMIYA 真实发送）。
+         **仅当对话开启「卡界面危险能力」时挂载**：关闭时不放，保留卡自身"UI not found→剪贴板"降级（不回归）。 -->
+    <form v-if="cardSendBridgeOn" id="send_form" class="card-send-bridge" aria-hidden="true" @submit.prevent="handleCardSend">
+      <textarea id="send_textarea"></textarea>
+      <div id="send_but" role="button" @click="handleCardSend"></div>
+    </form>
   </div>
 </template>
 
@@ -347,6 +357,18 @@ function handleSend(content: string) {
   chatStore.sendMessage(convStore.currentId, content, replyLength.value)
 }
 
+// ADR-0012 卡驱动"写入对话"桥（详见模板注释）。仅在对话开启「卡界面危险能力」时挂载隐藏发送 DOM，
+// 供同源消息 HTML iframe 里的卡（角色创建自动开场/快速选项）通过 `window.parent.document` 命中并自动发送。
+const cardSendBridgeOn = computed(() => !!(currentConv.value as any)?.mvu_capabilities?.dangerous)
+function handleCardSend() {
+  if (!convStore.currentId || chatStore.isStreaming) return
+  const ta = document.getElementById('send_textarea') as HTMLTextAreaElement | null
+  const text = (ta?.value || '').trim()
+  if (!text) return
+  if (ta) ta.value = ''
+  chatStore.sendMessage(convStore.currentId, text, replyLength.value)
+}
+
 function handleStop() {
   chatStore.stopGeneration()
 }
@@ -491,5 +513,17 @@ function handleStop() {
   background: #fff;
   border-radius: 12px;
   padding: 24px;
+}
+
+/* ADR-0012 卡驱动写入对话桥：主 DOM 里隐藏的 ST 等价发送 DOM（#send_textarea/#send_but），供同源
+   消息 HTML iframe 的卡自动发送用。off-screen 不可见、不占观感；仍能接收卡的程序化 .click() 派发。 */
+.card-send-bridge {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
 }
 </style>

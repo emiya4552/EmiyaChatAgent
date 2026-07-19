@@ -13,7 +13,8 @@
 """
 import logging
 
-from app.services.ejs_engine import EJSEngine
+from app.config import settings
+from app.services.js_ejs_engine import render_with_fallback
 from app.services.macro_engine import MacroEngine
 from app.services.worldbook.scanner import ActiveEntry
 from app.models.worldbook import (
@@ -83,7 +84,13 @@ class WorldbookInjector:
             ejs_scope = dict((scope or {}).get("local") or {})
             if ae.entry_lookup:
                 ejs_scope["__wi_entries"] = ae.entry_lookup
-            c = EJSEngine.render(ae.content, ejs_scope) if run_ejs else ae.content
+            # ADR-0021：世界书 EJS 优先走 V8 真 JS 沙箱（支持 _.get/箭头函数/数组方法等重逻辑卡），
+            # V8 不可用 / 单条出错自动回退 v0 EJSEngine（见 js_ejs_engine.render_with_fallback）。
+            c = (
+                render_with_fallback(ae.content, ejs_scope, enabled=settings.MVU_JS_EJS_ENABLED)
+                if run_ejs
+                else ae.content
+            )
             c = MacroEngine.render(c, scope)
             rendered_entries.append(
                 ActiveEntry(

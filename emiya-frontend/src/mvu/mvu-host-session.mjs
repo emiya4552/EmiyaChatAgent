@@ -11,13 +11,14 @@ import { createIframeHost } from './mvu-host-controller.mjs'
 import { extractMvuScripts } from './card-scripts.mjs'
 
 export class MvuHostSession {
-  constructor({ hostUrl = '/mvu-host.html', hostFactory = createIframeHost, includeUi = false, capabilityHandler, visible = false, hostContainer = null } = {}) {
+  constructor({ hostUrl = '/mvu-host.html', hostFactory = createIframeHost, includeUi = false, capabilityHandler, visible = false, hostContainer = null, dangerous = false } = {}) {
     this._hostUrl = hostUrl
     this._hostFactory = hostFactory
     this._includeUi = includeUi // ADR-0008d：true 时也载 UI 脚本（浮动面板/手机终端）
     this._capabilityHandler = capabilityHandler // ADR-0008d：卡能力请求裁决（缺省全拒）
     this._visible = visible // ADR-0008d：true 时 iframe 可见（停靠栏渲染卡 UI）
     this._hostContainer = hostContainer || undefined // 可见时的挂载容器（停靠栏）
+    this._dangerous = dangerous // ADR-0008d：对话是否开危险能力 → 透给 Host 决定是否装假 ST 发送 DOM
     this._host = null // { controller, iframe }
     this._loaded = false
   }
@@ -37,7 +38,7 @@ export class MvuHostSession {
       ...(this._hostContainer ? { parent: this._hostContainer } : {}),
     })
     await this._host.controller.ready()
-    await this._host.controller.loadCard(scripts)
+    await this._host.controller.loadCard(scripts, { dangerous: this._dangerous })
     this._loaded = true
     return { ok: true, scripts: scripts.map((s) => ({ name: s.name, kind: s.kind })), skipped }
   }

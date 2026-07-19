@@ -32,12 +32,14 @@ class ChatState(TypedDict):
     # 世界书激活集（由 node_activate_worldbook 产出）
     # 每元素是 dataclass ActiveEntry 的 dict 化（uid/comment/content/position/depth/role/outlet_name/worldbook_id/worldbook_name）
     wi_activated: list[dict]
-    # MVU 更新通道（ADR-0005）：本次 LLM 累积的 tool_calls（chat_service 填），
-    # 以及 post_process 产出的校验诊断与实际生效通道（供 mvu_runtime_view）
-    mvu_tool_calls: list[dict]
+    # MVU 更新通道：double_ai 策略产出的 ops（chat_service 填），以及 post_process 的校验诊断
+    # 与实际生效通道（供 mvu_runtime_view）。inline 策略更新走正文 <UpdateVariable> 内联解析。
     mvu_double_ai_ops: list[dict]
     mvu_update_diag: dict
     mvu_update_channel: str
+    # ADR-0022：本轮 MVU 更新是否走 double_ai（True）/ inline（False）；chat_service 据此
+    # 决定跑不跑 run_update_pass。node_build_prompt 写入。
+    mvu_divert_update: bool
 
     # 用户画像
     profile: dict | None

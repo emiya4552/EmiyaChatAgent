@@ -84,6 +84,20 @@ logger = logging.getLogger(__name__)
 
 _summary_tasks_inflight: set[UUID] = set()
 
+# 后台 fire-and-forget 任务的**强引用池**：asyncio 事件循环只对 task 持弱引用——不 hold 住引用，
+# task 可能在跑完前被 GC 回收，其 `async with AsyncSessionLocal()` 的 __aexit__（异步关连接）跑不完
+# → DB 连接不归还连接池 → 泄漏（表现为 `sqlalchemy.pool ... garbage collector ... non-checked-in
+# connection` 告警，进而 idle-in-transaction 拖垮 PG）。这里存强引用、完成后回调移除，确保后台任务
+# 跑到底、session 正常关闭。
+_background_tasks: set = set()
+
+
+def _spawn_background(coro) -> None:
+    """派发一个 fire-and-forget 后台任务，并持有强引用直到其完成（防被 GC 中途回收）。"""
+    task = _asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 
 def _should_retire_backend_apply(state: dict) -> bool:
     """判断本轮是否跳过后端 MVU 状态应用。
@@ -136,7 +150,7 @@ async def node_retrieve_memories(state: ChatState) -> dict:
         )
 
         if memories:
-            _asyncio.create_task(_update_reference_counts(
+            _spawn_background(_update_reference_counts(
                 user_id_str, [m["memory_id"] for m in memories]
             ))
 
@@ -516,7 +530,7 @@ async def node_prepare_history(state: ChatState) -> dict:
                             f"触发后台摘要: conv={conv.id}, "
                             f"pending={len(new_overflow)}, batch={batch_size}"
                         )
-                        _asyncio.create_task(_update_summary_background(
+                        _spawn_background(_update_summary_background(
                             conv_id=conv.id,
                             messages=new_overflow,
                             existing_summary=conv.summary,
@@ -794,7 +808,10 @@ async def node_build_prompt(state: ChatState) -> dict:
         # 这段必须在 system 合并前追加，确保最终仍处于 prompt 末端的 system 区。
         # 世界书中的状态栏 / 日志栏等尾部模板由 output_contracts 统一识别；
         # 这里仅消费契约模块产出的提示文本。
-        if settings.WORLDBOOK_TAIL_TEMPLATE_ENFORCEMENT and wi_activated:
+        # ADR-0022b：MVU 卡的输出格式由卡自己定（内联 <UpdateVariable> + <StatusPlaceHolderImpl/> +
+        # 卡的正则重排），EMIYA 输出契约对 MVU 卡冲突+冗余（会把 [系统]/[事件] 逻辑条目误判成尾部模板、
+        # 指挥 AI 复述它们）→ MVU 激活时整体关掉输出契约（锚定 + 执行都关，见 chat_service）。
+        if settings.WORLDBOOK_TAIL_TEMPLATE_ENFORCEMENT and wi_activated and not mvu_policy.active:
             from app.services.output_contracts import (
                 build_output_contract_prompt,
                 build_tail_template_directive,
@@ -829,9 +846,13 @@ async def node_build_prompt(state: ChatState) -> dict:
                         len(output_contract.required_sections),
                     )
 
-        # 主回复只写可见叙事；变量更新由回复后的独立更新通道处理。
-        if mvu_policy.divert_update_entries:
-            rendered.append({"role": "system", "content": _MVU_DOUBLE_AI_DIRECTIVE})
+        # MVU 更新策略（ADR-0022）：inline（默认）→ 主模型在正文末尾内联输出 <UpdateVariable>，
+        # 后端内联解析应用、卡正则隐藏/美化；double_ai → 主回复只写叙事，更新交回复后的独立 pass。
+        if mvu_policy.active:
+            rendered.append({
+                "role": "system",
+                "content": _MVU_DOUBLE_AI_DIRECTIVE if mvu_policy.divert_update_entries else _MVU_INLINE_DIRECTIVE,
+            })
 
         # squash 策略：仅在有预设时合并连续 system 消息。
         # 理由：预设 position=0/1 注入会产生多块紧邻的 system，合并为单条以满足
@@ -865,6 +886,9 @@ async def node_build_prompt(state: ChatState) -> dict:
             "persona_name": persona.name if persona else None,
             # 下游只读取这个有效值，确保所有 MVU 更新、同步和落库路径使用同一套开关。
             "persona_uses_mvu": mvu_policy.active,
+            # ADR-0022：本轮是否走 double-ai 更新（True）还是 inline（False）。chat_service 据此
+            # 决定跑不跑 run_update_pass；inline 由内联 <UpdateVariable> 解析处理，不跑第二 pass。
+            "mvu_divert_update": mvu_policy.divert_update_entries,
             "is_first_round": is_first,
             "error": None,
             "mvu_scope": scope,
@@ -875,12 +899,15 @@ async def node_build_prompt(state: ChatState) -> dict:
 # ─── 辅助函数 ────────────────────────────────────────────────────
 
 # 主回复阶段的 MVU 提示：正文只负责叙事，变量更新交给独立更新通道。
-_MVU_TOOL_DIRECTIVE = (
-    "[状态更新 — 工具模式]\n"
-    "本轮若剧情导致角色状态变量（stat_data）发生变化，请**调用 update_variables 工具**"
-    "提交一组 JSON Patch 变更；**不要**在回复正文里输出 <UpdateVariable> / <JSONPatch> "
-    "文本块。若本轮无任何变化，可以不调用该工具。变量字段、取值范围与更新规则见 "
-    "update_variables 工具说明。"
+_MVU_INLINE_DIRECTIVE = (
+    "[状态更新 — 内联模式]\n"
+    "本轮若剧情**建立或改变**了角色状态变量（stat_data），请在回复正文**末尾**追加一个更新块，格式严格为：\n"
+    "<UpdateVariable><JSONPatch>[{\"op\":\"replace\",\"path\":\"/字段/子字段\",\"value\":…}]</JSONPatch></UpdateVariable>\n"
+    "- **开局 / 创角 / 建立人设的回合**：把角色的姓名、设定、初始属性、以及世界书规则要求的初始化标志等**写入对应 "
+    "stat_data 字段**（这就是「建立」，务必输出更新块，不要只在正文里叙述而不落库）。\n"
+    "- op ∈ replace/add/insert/remove/delta/move；path 以 stat_data 为根（/字段/子字段 形式）；delta 用于数值增减。\n"
+    "- 不要更新以 `_` 开头的只读字段；变量字段、取值范围与更新规则见上方【状态监控】及世界书条目。\n"
+    "- 仅当本轮确实无任何状态建立/变化时才省略该块。除这个更新块（及卡要求的其它占位标签）外，正文里不要出现代码/系统/数据文本。"
 )
 
 
@@ -1097,25 +1124,9 @@ async def node_post_process(state: ChatState) -> dict:
         # 浏览器运行时接管 MVU 时，后端只保留 ops 与诊断，不直接修改 stat_data。
         _retire_apply = _should_retire_backend_apply(state)
 
-        # ── 主调用 tool 更新通道 ──
-        # 如果主模型返回了 update_variables tool call，把 tool 参数解析成 JSON Patch
-        # 并应用到同一个 stat_data 桶。
-        tool_calls = state.get("mvu_tool_calls")
-        if mvu_active and tool_calls and not _retire_apply:
-            from app.services.mvu_runtime.tools import extract_update_ops_from_tool_calls
-            from app.services.message_pipeline import _apply_json_patch_ops
-            ops = extract_update_ops_from_tool_calls(tool_calls)
-            if ops:
-                scope_after = state.get("mvu_scope") or {"local": {}, "global": {}, "names": {}}
-                local_bucket = scope_after.setdefault("local", {})
-                stat_data = local_bucket.setdefault("stat_data", {})
-                if not isinstance(stat_data, dict):
-                    stat_data = {}
-                    local_bucket["stat_data"] = stat_data
-                _apply_json_patch_ops(stat_data, ops, mvu_constraints, update_diag)
-                state["mvu_scope"] = scope_after
-                update_channel = "tool"
-
+        # 注：inline 策略的 <UpdateVariable> 更新已在回复渲染期由
+        # message_pipeline._apply_update_variable_to_scope 应用；此处只处理 double_ai 通道。
+        # （ADR-0005 单调用 tool 更新通道已随 tool 策略移除，见 ADR-0022。）
         double_ai_ops = state.get("mvu_double_ai_ops")
         if mvu_active and double_ai_ops and not _retire_apply:
             # double-ai 更新通道已经在 chat_service 中产出 ops；这里统一应用到状态桶。
@@ -1130,8 +1141,11 @@ async def node_post_process(state: ChatState) -> dict:
             state["mvu_scope"] = scope_after
             update_channel = "double_ai"
 
-        # 后端不 apply 时，诊断仍标记本轮更新交给浏览器运行时处理。
-        if _retire_apply and (state.get("mvu_double_ai_ops") or state.get("mvu_tool_calls")):
+        # 后端不 apply 时，诊断仍标记本轮更新交给浏览器运行时处理（inline 走原始 reply 里的
+        # <UpdateVariable>、double_ai 走 ops）。用未剥除的 assistant_reply 判断 inline。
+        if _retire_apply and (
+            state.get("mvu_double_ai_ops") or "<UpdateVariable" in (state.get("assistant_reply") or "")
+        ):
             update_channel = "browser"
 
         state["mvu_update_diag"] = update_diag
@@ -1436,7 +1450,7 @@ async def node_post_process(state: ChatState) -> dict:
                     db.add(conv)
                     await db.commit()
 
-                    _asyncio.create_task(_extract_memories_delayed(
+                    _spawn_background(_extract_memories_delayed(
                         user_id=str(user_id), dialogues=dialogues,
                         conversation_id=conv_id, existing_memories=existing_memories,
                         account_config=_acct,

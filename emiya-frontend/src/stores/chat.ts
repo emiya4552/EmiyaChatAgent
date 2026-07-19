@@ -95,6 +95,16 @@ export const useChatStore = defineStore('chat', () => {
         })), typeof ib === 'number' ? ib : null)
       },
       deleteChatMessages: (a: any) => mvuDeleteChatMessages(cid, (a?.ids || []).map((x: any) => Number(x))).then((r: any) => r?.deleted ?? 0),
+      // 卡驱动"写入对话"（ADR-0008d 第 4 类）：卡替用户发一条消息 + 触发生成（角色创建自动开场、
+      // 选项式推进）。走 EMIYA 与用户手动发送**完全同一路径**——推临时消息→SSE→onDone（含新一轮
+      // mvu_browser_sync 回灌本 Host），故卡发的消息也会正常结算 MVU 状态。isStreaming 时拒绝防串流。
+      sendMessage: (a: any) => {
+        const text = typeof a === 'string' ? a : String(a?.text ?? '')
+        if (!text.trim()) return Promise.resolve(false)
+        if (isStreaming.value) return Promise.reject(new Error('正在生成，无法发送'))
+        sendMessage(cid, text, typeof a?.replyLength === 'string' ? a.replyLength : 'medium')
+        return Promise.resolve(true)
+      },
     }
     return makeCapabilityHandler({ policy: { read: true, dangerous }, providers })
   }
@@ -127,6 +137,7 @@ export const useChatStore = defineStore('chat', () => {
         visible: !!container,
         hostContainer: container || undefined,
         capabilityHandler: _buildMvuCapabilityHandler(conversationId, dangerous),
+        dangerous, // 透给 Host：仅 dangerous 开时装假 ST 发送 DOM（卡驱动写入对话，见 mvu-host-bootstrap）
       })
       const r = await sess.init(detail?.card_data)
       if (!r?.ok) { sess.dispose(); return null }

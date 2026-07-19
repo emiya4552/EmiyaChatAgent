@@ -14,6 +14,9 @@ const READ = new Set([
 ])
 const DANGEROUS = new Set([
   'generateRaw', 'generate', 'setChatMessages', 'createChatMessages', 'deleteChatMessages',
+  // 卡驱动"写入对话"：卡替用户发一条消息并触发生成（角色创建自动开场、选项式推进等）。
+  // 花 token + 推进 RP，故归 dangerous；但可见、用户点卡内按钮触发，是危险里最温和的一类。
+  'sendMessage',
 ])
 
 /** 分类一个能力。`getVariables({type:'global'})` 归 read（读全局会话变量），否则归 local（本回合 stat_data）。 */

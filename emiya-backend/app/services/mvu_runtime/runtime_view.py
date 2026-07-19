@@ -109,10 +109,9 @@ def build_runtime_view(
     }
     if update_meta:
         diagnostics.append(
-            "ADR-0005 tool: "
-            f"enabled={bool(update_meta.get('enabled_flag'))}, "
+            "MVU update: "
+            f"mode={update_meta.get('mode') or '?'}, "
             f"persona_uses_mvu={bool(update_meta.get('persona_uses_mvu'))}, "
-            f"tools_sent={bool(update_meta.get('tools_sent'))}, "
             f"tool_calls={int(update_meta.get('tool_calls_received') or 0)}"
         )
     if update["applied"] or update["dropped"] or update["coerced"] or update["clamped"]:

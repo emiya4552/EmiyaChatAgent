@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """ChromaDB 操作封装 — 中文向量存储与语义检索。"""
+import asyncio
 import logging
 import math
 import os
@@ -22,6 +23,18 @@ logger = logging.getLogger(__name__)
 _client: Optional[chromadb.HttpClient] = None
 _lock = threading.Lock()
 _embedding_fn = None
+
+# ChromaDB 是同步 HTTP 客户端。所有网络调用**必须**经此封装挪到线程池 + 超时，
+# 否则 chroma 抽风（连接重置/挂起）会焊死整个异步事件循环，拖垮全后端（见 2026-07-16 事故）。
+# 超时给足首次 embedding 模型加载（已在启动时预热，命中缓存后仅剩网络往返）。
+_CHROMA_CALL_TIMEOUT = 15.0
+
+
+async def _chroma_call(fn, *args, **kwargs):
+    """在线程池执行同步 chroma 调用 + 超时。超时/失败由各调用方 try/except 降级。"""
+    return await asyncio.wait_for(
+        asyncio.to_thread(fn, *args, **kwargs), timeout=_CHROMA_CALL_TIMEOUT
+    )
 
 
 def _get_embedding_function():
@@ -196,9 +209,11 @@ async def add_memory(memory_id: str, user_id: str, content: str, metadata: dict)
         bool: 写入成功返回 True，失败返回 False（调用方据此决定是否重试或降级）。
     """
     try:
-        collection = get_or_create_collection(user_id)
+        collection = await _chroma_call(get_or_create_collection, user_id)
         metadata.setdefault("extracted_at", datetime.now(timezone.utc).isoformat())
-        collection.add(ids=[memory_id], documents=[content], metadatas=[metadata])
+        await _chroma_call(
+            collection.add, ids=[memory_id], documents=[content], metadatas=[metadata]
+        )
         logger.debug(f"ChromaDB 写入记忆: {memory_id}")
         return True
     except Exception as e:
@@ -233,7 +248,7 @@ async def search_memories(
     mmr_lambda = tuning.mmr_lambda if tuning else settings.MMR_LAMBDA
 
     try:
-        collection = get_or_create_collection(user_id)
+        collection = await _chroma_call(get_or_create_collection, user_id)
         # 检索 3×top_k 做重排序缓冲
         query_kwargs: dict = {
             "query_texts": [query],
@@ -241,7 +256,7 @@ async def search_memories(
         }
         if scope_filter:
             query_kwargs["where"] = {"scope": scope_filter}
-        results = collection.query(**query_kwargs)
+        results = await _chroma_call(collection.query, **query_kwargs)
 
         memories = []
         if results["ids"] and results["ids"][0]:
@@ -283,8 +298,8 @@ async def search_memories(
 async def delete_memory_vector(memory_id: str, user_id: str) -> None:
     """从 ChromaDB 中删除一条记忆的向量。"""
     try:
-        collection = get_or_create_collection(user_id)
-        collection.delete(ids=[memory_id])
+        collection = await _chroma_call(get_or_create_collection, user_id)
+        await _chroma_call(collection.delete, ids=[memory_id])
         logger.debug(f"ChromaDB 删除记忆向量: {memory_id}")
     except Exception as e:
         logger.error(f"ChromaDB 删除失败: {e}")

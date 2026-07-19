@@ -249,6 +249,10 @@ async def test_double_ai_mvu_update_is_applied_after_narrative(
     from app.models.conversation import Conversation
     from app.models.persona import Persona
     from app.models.worldbook import Worldbook
+    from app.config import settings
+
+    # ADR-0022：double_ai 已降为可选（默认 inline）；本测试显式强制 double_ai 策略。
+    monkeypatch.setattr(settings, "MVU_UPDATE_STRATEGY", "double_ai")
 
     async def _emit_narrative(*args, **kwargs):
         assert kwargs.get("tools") is None
@@ -330,9 +334,7 @@ async def test_double_ai_mvu_update_is_applied_after_narrative(
     assert done["mvu_runtime_view"]["update"]["channel"] == "double_ai"
     assert done["mvu_runtime_view"]["update"]["applied"] == 1
     assert done["mvu_runtime_view"]["update"]["clamped"][0]["path"] == "/score"
-    assert done["mvu_runtime_view"]["update"]["meta"]["enabled_flag"] is True
     assert done["mvu_runtime_view"]["update"]["meta"]["mode"] == "double_ai"
-    assert done["mvu_runtime_view"]["update"]["meta"]["tools_sent"] is False
     assert done["mvu_runtime_view"]["update"]["meta"]["tool_calls_received"] == 1
     assert done["mvu_runtime_view"]["update"]["meta"]["tool_call_names"] == ["update_variables"]
     assert done["mvu_runtime_view"]["update"]["meta"]["double_ai"]["ops"] == 1
