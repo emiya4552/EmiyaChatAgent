@@ -95,6 +95,6 @@ async function handleSave() {
 </script>
 
 <style scoped>
-.modal-card { width: 480px; max-height: 80vh; background: #fff; border-radius: 12px; padding: 24px; }
+.modal-card { width: 480px; max-height: 80vh; background: var(--color-bg-surface); border-radius: 12px; padding: 24px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 </style>

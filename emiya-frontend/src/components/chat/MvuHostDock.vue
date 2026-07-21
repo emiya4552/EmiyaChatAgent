@@ -10,28 +10,22 @@
     不重载。
   -->
   <div v-show="chatStore.mvuHostActive" class="mvu-host-root">
-    <div v-show="enabled" ref="overlay" class="mvu-host-overlay">
+    <div v-show="chatUi.cardUiVisible" ref="overlay" class="mvu-host-overlay">
       <!-- Host iframe 挂载点：常驻 DOM，勿用 v-if -->
       <div ref="mount" class="mvu-host-mount"></div>
     </div>
-    <button
-      class="mvu-host-toggle"
-      :title="enabled ? '隐藏卡界面浮层' : '显示卡界面浮层'"
-      @click="enabled = !enabled"
-    >
-      {{ enabled ? '隐藏卡界面' : '卡界面' }}
-    </button>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useChatStore } from '../../stores/chat'
+import { useChatUiStore } from '../../stores/chatUi'
 
 const chatStore = useChatStore()
+const chatUi = useChatUiStore()
 const overlay = ref<HTMLElement | null>(null)
 const mount = ref<HTMLElement | null>(null)
-const enabled = ref(true)
 
 type Rect = { x: number; y: number; w: number; h: number }
 let rects: Rect[] = [] // Host 上报的卡 UI 矩形（iframe 视口坐标）
@@ -44,7 +38,7 @@ function hit(ix: number, iy: number): boolean {
 }
 function setPe(over: boolean) {
   const f = iframeEl()
-  if (f) f.style.pointerEvents = enabled.value && over ? 'auto' : 'none'
+  if (f) f.style.pointerEvents = chatUi.cardUiVisible && over ? 'auto' : 'none'
 }
 // Host → 父：卡 UI 矩形 + pe:auto 时的指针位置（父窗口据此判断何时切回穿透）。
 function onWinMsg(ev: MessageEvent) {
@@ -55,7 +49,7 @@ function onWinMsg(ev: MessageEvent) {
 }
 // pe:none 时鼠标事件走父窗口 document：换算成 iframe 坐标做命中，命中就切 pe:auto。
 function onDocMove(e: PointerEvent) {
-  if (!enabled.value || !chatStore.mvuHostActive) return
+  if (!chatUi.cardUiVisible || !chatStore.mvuHostActive) return
   const ov = overlay.value?.getBoundingClientRect()
   if (!ov) return
   setPe(hit(e.clientX - ov.left, e.clientY - ov.top))
@@ -98,22 +92,4 @@ onBeforeUnmount(() => {
   border: 0;
   background: transparent;
 }
-/* 显隐开关：常驻可点，放**左下角**（避开头部短/中/长+设置按钮，也避开右下角发送键）。 */
-.mvu-host-toggle {
-  position: absolute;
-  bottom: 84px;
-  left: 16px;
-  z-index: 22;
-  pointer-events: auto;
-  padding: 4px 10px;
-  font-size: 12px;
-  border: 1px solid var(--n-border-color, #e0e0e6);
-  border-radius: 14px;
-  background: var(--n-color, #fff);
-  color: var(--n-text-color, #333);
-  cursor: pointer;
-  opacity: 0.6;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
-}
-.mvu-host-toggle:hover { opacity: 1; }
 </style>

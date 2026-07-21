@@ -1,18 +1,15 @@
 <template>
   <PageShell>
-    <div class="page-header">
-      <n-button text @click="$router.push('/chat')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回聊天
-      </n-button>
-      <h2 class="page-title">世界书管理</h2>
-      <n-button type="primary" @click="createBlank">+ 新建</n-button>
-      <n-button type="primary" @click="triggerImport">
-        <template #icon><n-icon><DownloadOutline /></n-icon></template>
-        导入
-      </n-button>
-      <input ref="fileInputRef" type="file" accept=".json" style="display: none" @change="onImportFile" />
-    </div>
+    <WorkspaceHeader eyebrow="创作资产" title="世界书" description="管理可复用的世界观设定条目。">
+      <template #actions>
+        <n-button @click="triggerImport">
+          <template #icon><n-icon><DownloadOutline /></n-icon></template>
+          导入
+        </n-button>
+        <n-button type="primary" @click="createBlank">+ 新建世界书</n-button>
+      </template>
+    </WorkspaceHeader>
+    <input ref="fileInputRef" type="file" accept=".json" style="display: none" @change="onImportFile" />
 
     <div class="page-content">
       <n-spin :show="loading">
@@ -24,14 +21,14 @@
           </n-empty>
         </div>
 
-        <div v-else class="wb-list">
+        <div v-else class="asset-list">
           <div
             v-for="wb in list"
             :key="wb.id"
-            class="wb-card"
+            class="asset-card"
             @click="$router.push(`/worldbooks/${encodeURIComponent(wb.id)}/edit`)"
           >
-            <div class="wb-icon">W</div>
+            <div class="asset-lead wb-lead">W</div>
             <div class="card-body">
               <div class="card-name-row">
                 <h3 class="card-name">{{ wb.name }}</h3>
@@ -71,6 +68,7 @@ import { useRouter } from 'vue-router'
 import { NButton, NIcon, NSpin, NEmpty, NTag, NPopconfirm, useMessage } from 'naive-ui'
 import { ArrowBack, DownloadOutline } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import {
   fetchWorldbooks, deleteWorldbook, importWorldbook,
   createWorldbook, exportWorldbook,
@@ -152,34 +150,8 @@ async function handleDelete(wb: WorldbookListItem) {
 </script>
 
 <style scoped>
-.page-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
-.page-title { flex: 1; margin: 0; font-size: 20px; white-space: nowrap; }
+/* 卡片皮肤统一到全局 styles/asset-list.css；此处仅留页面专属的引导块填色与空态 */
 .page-content { min-height: 200px; }
-.wb-list { display: flex; flex-direction: column; gap: 12px; }
-.wb-card {
-  display: flex; align-items: flex-start; background: var(--color-bg-surface); border-radius: var(--radius-md);
-  padding: 20px 24px; box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
-}
-.wb-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
-.wb-icon {
-  width: 56px; height: 56px; border-radius: var(--radius-md); flex-shrink: 0; margin-right: 16px;
-  background: linear-gradient(135deg, #6b9, #4a8); color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 24px; font-weight: 700;
-}
-.card-body { flex: 1; min-width: 0; }
-.card-name-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
-.card-name { margin: 0; font-size: 17px; font-weight: 600; }
-.card-desc {
-  margin: 0 0 6px; font-size: 13px; color: var(--color-text-secondary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 520px;
-}
-.card-meta { margin: 0; font-size: 12px; color: var(--color-text-tertiary); }
-.card-actions {
-  display: flex; flex-direction: column; align-items: flex-end;
-  margin-left: 16px; flex-shrink: 0; gap: 2px;
-}
 .empty-state { padding: 60px 0; }
+.wb-lead { background: linear-gradient(135deg, #6b9, #4a8); }
 </style>

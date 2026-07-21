@@ -3,7 +3,7 @@
 import logging
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -50,6 +50,39 @@ async def get_user_conversations(
         .order_by(Conversation.updated_at.desc())
     )
     return list(result.unique().scalars().all())
+
+
+async def get_last_message_previews(
+    db: AsyncSession, conversation_ids: list[UUID], *, max_len: int = 80
+) -> dict[UUID, str]:
+    """一次取多段对话各自最后一条非系统消息的预览文本（避免 N+1）。
+
+    Postgres `DISTINCT ON (conversation_id)` + 按 created_at 倒序 = 每段最新一条；
+    预览优先显示版 display_content、回退 content，折叠空白后截断。供首页最近对话卡片用。
+    """
+    if not conversation_ids:
+        return {}
+    stmt = (
+        select(
+            Message.conversation_id,
+            func.coalesce(Message.display_content, Message.content).label("text"),
+        )
+        .where(
+            Message.conversation_id.in_(conversation_ids),
+            Message.role.in_(("user", "assistant")),
+        )
+        .order_by(Message.conversation_id, Message.created_at.desc())
+        .distinct(Message.conversation_id)
+    )
+    rows = await db.execute(stmt)
+    out: dict[UUID, str] = {}
+    for conv_id, text in rows.all():
+        collapsed = " ".join((text or "").split())
+        if len(collapsed) > max_len:
+            collapsed = collapsed[:max_len].rstrip() + "…"
+        if collapsed:
+            out[conv_id] = collapsed
+    return out
 
 
 async def create_conversation(

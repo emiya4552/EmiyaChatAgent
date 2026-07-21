@@ -111,7 +111,7 @@ async function handleRegister() {
       nickname: form.value.nickname,
     })
     message.success('注册成功')
-    router.push('/chat')
+    router.push('/home')
   } catch (err: any) {
     const detail = err.response?.data?.detail || '注册失败'
     message.error(detail)
@@ -127,24 +127,27 @@ async function handleRegister() {
   justify-content: center;
   align-items: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 24px;
+  background: radial-gradient(circle at 30% 12%, #f6ece0, var(--color-bg-page) 60%);
 }
 .auth-card {
   width: 400px;
+  max-width: 100%;
   padding: 40px;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
 }
 .auth-title {
   text-align: center;
-  font-size: 28px;
-  color: #333;
+  font: 600 30px var(--font-serif);
+  color: var(--color-primary);
   margin: 0 0 4px;
 }
 .auth-subtitle {
   text-align: center;
-  color: #999;
+  color: var(--color-text-secondary);
   margin: 0 0 32px;
   font-size: 14px;
 }
@@ -158,7 +161,7 @@ async function handleRegister() {
   font-size: 14px;
 }
 .auth-switch a {
-  color: #667eea;
+  color: var(--color-primary);
   text-decoration: none;
 }
 </style>

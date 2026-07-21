@@ -1,68 +1,12 @@
 <template>
   <div class="chat-main">
-    <div class="chat-header">
-      <div class="header-left" v-if="currentConv">
-        <img
-          v-if="personaAvatarUrl"
-          class="persona-avatar"
-          :src="personaAvatarUrl!"
-          :alt="currentConv.persona_name || 'AI'"
-        />
-        <div v-else class="persona-avatar" :style="{ background: avatarColor(currentConv.persona_name || 'AI') }">
-          {{ (currentConv.persona_name || 'AI')[0] }}
-        </div>
-        <span class="persona-name">{{ currentConv.persona_name || '未选择人设' }}</span>
-        <span class="separator">|</span>
-        <span class="conv-title">{{ currentConv.title || '新对话' }}</span>
-      </div>
-      <div class="header-left" v-else>
-        <span class="welcome-text">选择一个对话或新建一个开始聊天</span>
-      </div>
-
-      <div class="header-right">
-        <div
-          :class="['length-toggle', { disabled: !replyLengthEnabled }]"
-          :title="!replyLengthEnabled ? '当前模板未启用「回复长度」块；去模板编辑器开启后此控件才生效' : ''"
-        >
-          <button
-            v-for="opt in lengthOptions"
-            :key="opt.value"
-            :class="['length-btn', { active: replyLength === opt.value }]"
-            :title="opt.tip"
-            :disabled="!replyLengthEnabled"
-            @click="setReplyLength(opt.value)"
-          >
-            {{ opt.label }}
-          </button>
-        </div>
-        <n-button v-if="currentConv" size="small" @click="showConfigPanel = true">
-          <template #icon><n-icon><SettingsOutline /></n-icon></template>
-        </n-button>
-        <n-dropdown trigger="hover" :options="userMenuOptions" @select="handleUserMenu">
-          <span class="user-info">
-            <img
-              v-if="authStore.user?.avatar_url"
-              :src="authStore.user.avatar_url"
-              :alt="authStore.user.nickname || '用户'"
-              class="user-avatar user-avatar-img"
-            />
-            <span
-              v-else
-              class="user-avatar"
-              :style="{ background: avatarColor(authStore.user?.nickname || '我') }"
-            >
-              {{ authStore.user?.nickname?.charAt(0) || '我' }}
-            </span>
-            <span class="user-name">{{ authStore.user?.nickname || '用户' }}</span>
-          </span>
-        </n-dropdown>
-      </div>
-    </div>
-
-    <div v-if="perceptionOn && convStore.currentMood" class="mood-indicator">
-      <span class="mood-emoji">{{ moodEmoji }}</span>
-      <span class="mood-label">{{ convStore.currentMood }}</span>
-      <span class="mood-intensity">· 强度 {{ convStore.moodIntensity }}/10</span>
+    <!-- MVU 卡初始状态未成功播种时的非阻塞提示（不挡聊天，仅提示 + 一键重试）。
+         判定：确为 MVU 卡（persona.uses_mvu）且对话级 mvu_state 未初始化。 -->
+    <div v-if="mvuNeedsInit" class="mvu-init-banner">
+      <span>⚠ 这张 MVU 卡的初始状态尚未成功播种，状态栏与变量可能缺失。</span>
+      <button type="button" :disabled="reinitializing" @click="handleReinitMvu">
+        {{ reinitializing ? '正在初始化…' : '重新初始化' }}
+      </button>
     </div>
 
     <RelationshipBar
@@ -70,6 +14,8 @@
       ref="relationshipBarRef"
       :relationship="currentRelationship"
       :persona-name="currentConv.persona_name || ''"
+      :mood="convStore.currentMood"
+      :mood-intensity="convStore.moodIntensity"
     />
 
     <MilestoneMessage v-if="perceptionOn" :event="convStore.milestone" />
@@ -113,13 +59,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, h, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useConversationStore } from '../../stores/conversation'
 import { useChatStore } from '../../stores/chat'
-import { useAuthStore } from '../../stores/auth'
-import { NIcon, NDropdown, NButton, NModal, useMessage } from 'naive-ui'
-import { LogOutOutline, SettingsOutline, PersonCircleOutline } from '@vicons/ionicons5'
+import { useChatUiStore } from '../../stores/chatUi'
+import { NModal, useMessage } from 'naive-ui'
 import MessageList from './MessageList.vue'
 import ChatInput from './ChatInput.vue'
 import RelationshipBar from '../relationship/RelationshipBar.vue'
@@ -127,14 +71,13 @@ import MilestoneMessage from './MilestoneMessage.vue'
 import ConversationConfigPanel from './ConversationConfigPanel.vue'
 import MvuHostDock from './MvuHostDock.vue'
 import { fetchConversationRelationship } from '../../api/relationship'
-import { fetchPersonas, fetchPersonaDetail } from '../../api/persona'
-import { switchGreeting } from '../../api/conversation'
-import { avatarColor } from '../../utils/avatar'
-import type { Relationship, PersonaListItem, PersonaDetail } from '../../types'
+import { fetchPersonaDetail } from '../../api/persona'
+import { switchGreeting, reloadMvuInitialState } from '../../api/conversation'
+import type { Relationship, PersonaDetail } from '../../types'
 
-const router = useRouter()
 const convStore = useConversationStore()
 const chatStore = useChatStore()
+const chatUi = useChatUiStore()
 
 // ADR-1g strict 阶段状态文案。
 const CONTRACT_STAGE_LABELS: Record<string, string> = {
@@ -147,49 +90,59 @@ const CONTRACT_STAGE_LABELS: Record<string, string> = {
 const contractStageLabel = computed(
   () => CONTRACT_STAGE_LABELS[chatStore.contractStage] || '正在生成结构化回复…',
 )
-const authStore = useAuthStore()
 const msg = useMessage()
 
 const showConfigPanel = ref(false)
-
-const REPLY_LENGTH_KEY = 'emiya_reply_length'
-const lengthOptions = [
-  { value: 'short', label: '短', tip: '极简回复，1-3句话' },
-  { value: 'medium', label: '中', tip: '适中回复' },
-  { value: 'long', label: '长', tip: '尽情展开，详细描述' },
-]
-const replyLength = ref(localStorage.getItem(REPLY_LENGTH_KEY) || 'medium')
-
-function setReplyLength(v: string) {
-  replyLength.value = v
-  localStorage.setItem(REPLY_LENGTH_KEY, v)
-}
-
 const currentConv = computed(() =>
   convStore.list.find((c) => c.id === convStore.currentId) || null
 )
+
+watch(() => chatUi.openConfigSignal, () => {
+  if (!currentConv.value) {
+    msg.warning('请先选择或新建一个对话')
+    return
+  }
+  showConfigPanel.value = true
+})
 
 // 感知系统开关（ADR-0020）：对话级 analyze_emotion 显式为 false 时，隐藏对话内的
 // mood/关系条/里程碑指示器。必须显式判 !== false —— 历史开过感知的对话 DB 里已存
 // current_mood/relationship 数据，只靠"有没有数据"判断会在关闭后仍露出指示器。
 const perceptionOn = computed(() => currentConv.value?.analyze_emotion !== false)
 
-// 当前对话使用的模板里 reply_length block 是否启用——derived 字段，由后端
-// _compute_reply_length_enabled 查模板算好（详见 ADR-0014）。
-// 未选对话时按"已启用"处理（让按钮可点，避免选了对话前没法预设长度偏好）。
-const replyLengthEnabled = computed(() =>
-  currentConv.value ? currentConv.value.reply_length_enabled !== false : true
+// MVU 卡初始状态未播种的安全网：确为 MVU 卡（uses_mvu，来自已加载的 personaDetail）
+// 且对话 mvu_state 未初始化时，给出非阻塞提示 + 一键重新播种。健康 MVU 卡 initialized
+// 恒真 → 不显示；非 MVU 卡 uses_mvu=false → 不显示（不误报）。
+const reinitializing = ref(false)
+const mvuNeedsInit = computed(() =>
+  currentPersonaDetail.value?.uses_mvu === true &&
+  currentConv.value?.mvu_state?.initialized === false,
 )
 
-const personas = ref<PersonaListItem[]>([])
-const personaAvatarUrl = computed(() => {
-  if (!currentConv.value?.persona_id) return null
-  const p = personas.value.find(p => p.id === currentConv.value!.persona_id)
-  return p?.avatar_url || null
-})
+async function handleReinitMvu() {
+  const id = convStore.currentId
+  if (!id || reinitializing.value) return
+  reinitializing.value = true
+  try {
+    const updated = await reloadMvuInitialState(id)
+    const idx = convStore.list.findIndex((c) => c.id === id)
+    if (idx !== -1) {
+      convStore.list[idx] = {
+        ...convStore.list[idx],
+        mvu_state: updated.mvu_state,
+        variables: updated.variables,
+      }
+    }
+    msg.success('已重新初始化 MVU 状态')
+  } catch {
+    msg.error('重新初始化失败')
+  } finally {
+    reinitializing.value = false
+  }
+}
 
-onMounted(async () => {
-  try { personas.value = await fetchPersonas('all') } catch { /* */ }
+const personaAvatarUrl = computed(() => {
+  return convStore.personaAvatarUrl(currentConv.value?.persona_id || null)
 })
 
 // ─── 开场白左右切换（ADR-0017）──────────────────────────────────
@@ -199,16 +152,20 @@ const currentPersonaDetail = ref<PersonaDetail | null>(null)
 const currentGreetingIdx = ref(0)
 const greetingSwitching = ref(false)
 
-async function loadCurrentPersonaDetail() {
-  const personaId = currentConv.value?.persona_id
-  if (!personaId) { currentPersonaDetail.value = null; return }
-  try {
-    currentPersonaDetail.value = await fetchPersonaDetail(personaId)
-  } catch {
-    currentPersonaDetail.value = null
+async function loadPersonaDetail(conversationId: string) {
+  const conversation = convStore.list.find((item) => item.id === conversationId)
+  const personaId = conversation?.persona_id
+  if (!personaId) {
+    if (convStore.currentId === conversationId) currentPersonaDetail.value = null
+    return
   }
-  // 切对话总是把 idx 重置为 0；后端 create_conversation 默认就是 first_message
-  currentGreetingIdx.value = 0
+  try {
+    const detail = await fetchPersonaDetail(personaId)
+    // 快速切换时旧请求可能后返回；只允许当前对话提交本地详情，避免开场白串台。
+    if (convStore.currentId === conversationId) currentPersonaDetail.value = detail
+  } catch {
+    if (convStore.currentId === conversationId) currentPersonaDetail.value = null
+  }
 }
 
 const greetingTotal = computed(() => {
@@ -264,67 +221,70 @@ async function handleSwitchGreeting(newIdx: number) {
   }
 }
 
-const MOOD_EMOJI_MAP: Record<string, string> = {
-  '开心': '😊', '平静': '😌', '低落': '😔', '焦虑': '😰', '愤怒': '😤',
-  '兴奋': '🤩', '疲惫': '😴', '困惑': '🤔', '感动': '🥹', '思念': '💭',
-}
-const moodEmoji = computed(() => MOOD_EMOJI_MAP[convStore.currentMood || ''] || '😌')
-
-const userMenuOptions = [
-  {
-    label: '账户设置',
-    key: 'settings',
-    icon: () => h(NIcon, null, { default: () => h(PersonCircleOutline) }),
-  },
-  {
-    label: '退出登录',
-    key: 'logout',
-    icon: () => h(NIcon, null, { default: () => h(LogOutOutline) }),
-  },
-]
-
 const currentRelationship = ref<Relationship | null>(null)
 const relationshipBarRef = ref<InstanceType<typeof RelationshipBar> | null>(null)
 
-function handleUserMenu(key: string) {
-  if (key === 'logout') {
-    authStore.logout()
-    router.push('/login')
-  } else if (key === 'settings') {
-    router.push('/settings')
+async function loadRelationship(conversationId: string) {
+  try {
+    const relationship = await fetchConversationRelationship(conversationId)
+    if (convStore.currentId === conversationId) currentRelationship.value = relationship
+  } catch {
+    if (convStore.currentId === conversationId) currentRelationship.value = null
   }
 }
 
-async function loadRelationship() {
-  if (!convStore.currentId) return
-  try {
-    currentRelationship.value = await fetchConversationRelationship(convStore.currentId)
-  } catch {
-    currentRelationship.value = null
+function messagesBelongTo(conversationId: string): boolean {
+  return chatStore.messages.length > 0 &&
+    chatStore.messages.every((message) => message.conversation_id === conversationId)
+}
+
+async function activateConversation(conversationId: string, forgetScrollPosition: boolean) {
+  chatStore.stopLiveWatch()
+  currentPersonaDetail.value = null
+  currentGreetingIdx.value = 0
+  currentRelationship.value = null
+
+  const reuseMessages = messagesBelongTo(conversationId)
+  if (forgetScrollPosition || !reuseMessages) {
+    // 主动切换对话从最新消息开始；路由离开再返回则保留原阅读位置。
+    chatUi.forgetScrollPosition(conversationId)
   }
+
+  const tasks: Promise<unknown>[] = [
+    loadRelationship(conversationId),
+    loadPersonaDetail(conversationId),
+  ]
+
+  // 路由往返时 store 仍持有同一对话消息，不清空即可由 MessageList 恢复滚动锚点。
+  // 从首页选择另一对话进入时 currentId 已提前变化，但消息可能仍属于旧对话，必须重拉。
+  if (!reuseMessages) {
+    chatStore.clearMessages()
+    tasks.push(chatStore.fetchMessages(conversationId).catch(() => undefined))
+  }
+
+  await Promise.all(tasks)
+  if (convStore.currentId === conversationId) chatStore.startLiveWatch(conversationId)
 }
 
 watch(
   () => convStore.currentId,
-  async (newId) => {
+  (newId) => {
+    if (newId) {
+      void activateConversation(newId, true)
+      return
+    }
     chatStore.stopLiveWatch()
-    // 切对话清掉本地 persona detail / greetingIdx，避免上个对话的开场白列表错配
     currentPersonaDetail.value = null
     currentGreetingIdx.value = 0
-    if (newId) {
-      chatStore.clearMessages()
-      try {
-        await chatStore.fetchMessages(newId)
-      } catch {
-        // ignore
-      }
-      loadRelationship()
-      // ADR-0017：拉 persona 详情，用 alternate_greetings 决定 navigator 是否显示
-      loadCurrentPersonaDetail()
-      chatStore.startLiveWatch(newId)
-    }
-  }
+    currentRelationship.value = null
+  },
 )
+
+onMounted(() => {
+  // currentId 可能在 ChatMain 挂载前已由首页设置，或在路由往返期间保持不变；
+  // 这两种情况 watcher 都不会触发，必须在挂载时补做一次激活。
+  if (convStore.currentId) void activateConversation(convStore.currentId, false)
+})
 
 watch(() => convStore.relationshipChange, (change) => {
   if (change && currentRelationship.value) {
@@ -345,7 +305,7 @@ watch(() => convStore.affinityUpdate, (update) => {
 
 watch(() => chatStore.isStreaming, (streaming) => {
   if (!streaming && convStore.currentId) {
-    loadRelationship()
+    loadRelationship(convStore.currentId)
   }
 })
 
@@ -354,7 +314,7 @@ function handleSend(content: string) {
     msg.warning('请先创建或选择一个对话')
     return
   }
-  chatStore.sendMessage(convStore.currentId, content, replyLength.value)
+  chatStore.sendMessage(convStore.currentId, content, chatUi.replyLength)
 }
 
 // ADR-0012 卡驱动"写入对话"桥（详见模板注释）。仅在对话开启「卡界面危险能力」时挂载隐藏发送 DOM，
@@ -366,7 +326,7 @@ function handleCardSend() {
   const text = (ta?.value || '').trim()
   if (!text) return
   if (ta) ta.value = ''
-  chatStore.sendMessage(convStore.currentId, text, replyLength.value)
+  chatStore.sendMessage(convStore.currentId, text, chatUi.replyLength)
 }
 
 function handleStop() {
@@ -386,118 +346,35 @@ function handleStop() {
   margin: 0 20px 8px;
   padding: 6px 12px;
   font-size: 13px;
-  color: #2563eb;
-  background: rgba(37, 99, 235, 0.1);
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
   border-radius: 8px;
   text-align: center;
 }
-.chat-header {
-  padding: 10px 20px;
-  background: var(--color-bg-header);
-  border-bottom: 1px solid var(--color-border-light);
+.mvu-init-banner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-.header-left {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.persona-avatar {
-  width: 28px; height: 28px;
-  border-radius: 50%;
-  color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 600;
-  flex-shrink: 0;
-  object-fit: cover;
-}
-.persona-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--color-text);
-}
-.separator {
-  color: var(--color-border);
-}
-.conv-title {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-}
-.welcome-text {
-  color: var(--color-text-tertiary);
-  font-size: 14px;
-}
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  transition: background var(--transition-fast);
-}
-.user-info:hover {
-  background: var(--color-border-light);
-}
-.user-avatar {
-  width: 28px; height: 28px;
-  border-radius: 50%;
-  color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 600;
-}
-.user-avatar-img { object-fit: cover; }
-.user-name {
-  font-size: 14px;
-  color: var(--color-text);
-}
-
-.mood-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 20px;
-  background: var(--color-bg-page);
-  border-bottom: 1px solid var(--color-border-light);
+  gap: 12px;
+  margin: 12px 20px 0;
+  padding: 10px 14px;
   font-size: 13px;
-  color: var(--color-text-secondary);
-  transition: all var(--transition-normal);
+  color: var(--color-text);
+  background: rgba(226, 161, 95, 0.16);
+  border: 1px solid rgba(226, 161, 95, 0.5);
+  border-radius: 8px;
 }
-.mood-emoji { font-size: 15px; }
-.mood-label { font-weight: 500; }
-.mood-intensity { color: var(--color-text-tertiary); }
-
-.length-toggle {
-  display: flex;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.length-toggle.disabled {
-  opacity: 0.4;
-}
-.length-btn {
-  padding: 4px 14px;
-  border: none;
-  background: var(--color-bg-surface);
-  color: var(--color-text-tertiary);
-  font-size: 13px;
+.mvu-init-banner span { flex: 1; }
+.mvu-init-banner button {
+  flex: none;
+  padding: 5px 12px;
+  color: #fffaf4;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent-strong);
+  font-size: 12px;
   cursor: pointer;
-  transition: all var(--transition-fast);
-  border-right: 1px solid var(--color-border);
 }
-.length-btn:last-child { border-right: none; }
-.length-btn:not(:disabled):hover { background: var(--color-primary-bg); color: var(--color-primary); }
-.length-btn.active { background: var(--color-primary); color: #fff; }
-.length-btn:disabled { cursor: not-allowed; }
-
+.mvu-init-banner button:disabled { opacity: 0.6; cursor: not-allowed; }
 .error-bar {
   padding: 8px 16px;
   background: #e74c3c;
@@ -510,7 +387,7 @@ function handleStop() {
   width: 520px;
   max-height: 80vh;
   overflow-y: auto;
-  background: #fff;
+  background: var(--color-bg-surface);
   border-radius: 12px;
   padding: 24px;
 }

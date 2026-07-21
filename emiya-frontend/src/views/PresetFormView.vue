@@ -1,12 +1,11 @@
 <template>
   <PageShell maxWidth="800px">
-    <div class="page-header">
-      <n-button text @click="$router.push('/presets')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回
-      </n-button>
-      <h2 class="page-title">{{ isEdit ? `编辑「${form.name || '...'}」` : '新建预设' }}</h2>
-    </div>
+    <WorkspaceHeader
+      eyebrow="创作资产"
+      :title="isEdit ? `编辑「${form.name || '...'}」` : '新建预设'"
+      backTo="/presets"
+      backLabel="所有预设"
+    />
 
     <div class="form-wrapper">
       <n-spin :show="loadingForm">
@@ -152,6 +151,7 @@ import {
 } from 'naive-ui'
 import { ArrowBack, ChevronUp, ChevronDown, CreateOutline } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { fetchPresetDetail, updatePreset, createPreset } from '../api/preset'
 import type { PromptEntry } from '../types'
 
@@ -327,21 +327,21 @@ async function handleSave() {
   gap: 0 16px;
 }
 
-.tab-hint { margin: 8px 0 0; font-size: 12px; color: #999; }
+.tab-hint { margin: 8px 0 0; font-size: 12px; color: var(--color-text-tertiary); }
 
 .prompts-section { margin-top: 0; }
 .prompts-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .prompt-list { display: flex; flex-direction: column; gap: 10px; }
 .prompt-card {
-  background: #f9f9fb;
-  border: 1px solid #e8e8ee;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-light);
   border-radius: 8px;
   padding: 12px;
 }
 .prompt-card-header { display: flex; align-items: center; gap: 8px; }
 .prompt-card-body { margin-top: 10px; }
 .prompt-move { display: flex; flex-direction: column; gap: 0; }
-.prompt-disabled { opacity: 0.5; background: #f0f0f0; }
+.prompt-disabled { opacity: 0.5; }
 .prompts-empty { padding: 24px 0; }
 
 .injection-options {

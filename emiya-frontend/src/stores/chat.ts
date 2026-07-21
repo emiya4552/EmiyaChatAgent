@@ -43,6 +43,10 @@ export const useChatStore = defineStore('chat', () => {
   let mvuSessionConvId: string | null = null
   let mvuInitPromise: Promise<any> | null = null // 建 Host 的在途 promise：并发/重复触发共享同一次构建，避免竞态重建 + 双份 CDN 加载
   let mvuLastTurnKey: string | null = null        // 已处理的 message_done 去重键（两个 onDone 路径会各触发一次同一回合）
+  // 构建代际号：每次开始构建 / dispose 都 +1。异步构建（拉 CDN 数秒）只在自己这一代仍是最新时才提交
+  // mvuSession/mvuHostActive，否则丢弃并销毁自身 iframe。防止「慢构建的卡在用户切走后才完成，把旧卡的
+  // Host UI 串台到新对话」（如 WuWa）。见 disposeMvuSession / ensureMvuSession。
+  let mvuBuildSeq = 0
   // ADR-0008d：卡 UI 停靠栏。容器由 MvuHostDock.vue 注册；mvuHostActive 决定停靠栏是否显示。
   const mvuHostContainer = ref<HTMLElement | null>(null)
   const mvuHostActive = ref(false) // 当前卡有可渲染 UI（logic/ui 脚本）且容器就绪时为真 → 显示停靠栏
@@ -64,6 +68,7 @@ export const useChatStore = defineStore('chat', () => {
     })
   }
   function disposeMvuSession() {
+    mvuBuildSeq++ // 作废任何在途构建：它们完成时会发现代际不符而自我销毁，不会串台
     if (mvuSession) { try { mvuSession.dispose() } catch { /* ignore */ } mvuSession = null }
     mvuSessionConvId = null
     mvuInitPromise = null
@@ -122,6 +127,7 @@ export const useChatStore = defineStore('chat', () => {
     if (mvuInitPromise && mvuSessionConvId === conversationId) return mvuInitPromise
     if (mvuSessionConvId && mvuSessionConvId !== conversationId) disposeMvuSession()
     mvuSessionConvId = conversationId
+    const buildSeq = ++mvuBuildSeq // 本次构建的代际；提交前校验它仍是最新
     const p: Promise<any> = (async () => {
       const conv = useConversationStore().list.find((c) => c.id === conversationId) as any
       const personaId = conv?.persona_id
@@ -131,6 +137,8 @@ export const useChatStore = defineStore('chat', () => {
       const extracted = extractMvuScripts(detail?.card_data, { includeUi: true })
       const hasUi = (extracted?.scripts || []).some((s: any) => s.kind === 'ui' || s.kind === 'logic')
       const container = hasUi ? await _waitForMvuContainer() : null
+      // 拉 persona / 等容器期间用户可能已切走：本次构建已过期 → 别再建 iframe。
+      if (buildSeq !== mvuBuildSeq) return null
       const dangerous = !!(conv?.mvu_capabilities?.dangerous)
       const sess = new MvuHostSession({
         includeUi: true,
@@ -140,6 +148,9 @@ export const useChatStore = defineStore('chat', () => {
         dangerous, // 透给 Host：仅 dangerous 开时装假 ST 发送 DOM（卡驱动写入对话，见 mvu-host-bootstrap）
       })
       const r = await sess.init(detail?.card_data)
+      // init 拉 CDN 期间用户可能已切走：本次构建已过期 → 销毁自身 iframe，绝不提交/点亮，
+      // 避免旧卡 Host UI 串台到新对话（WuWa 串台根因）。
+      if (buildSeq !== mvuBuildSeq) { try { sess.dispose() } catch { /* ignore */ } return null }
       if (!r?.ok) { sess.dispose(); return null }
       mvuSession = sess
       mvuHostActive.value = !!container // 有可见 UI 才亮停靠栏

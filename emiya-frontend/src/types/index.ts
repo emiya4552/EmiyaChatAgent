@@ -273,13 +273,15 @@ export interface Conversation {
   // 情绪分析功能开关（无 template block；conv 级独立）
   analyze_emotion: boolean
   // 该 conv 有效模板里 reply_length block 是否启用——derived 字段（详见 ADR-0014）
-  // false 时 ChatMain 右上的短/中/长按钮组应 disable
+  // false 时 ChatNavigation 顶栏的短/中/长按钮组应 disable
   reply_length_enabled: boolean
   // MVU 对话级变量桶（详见 ADR-0007）；只读暴露给前端展示
   variables: Record<string, unknown>
   mvu_state: MvuConversationState | null
   // MVU 卡界面危险能力 per-conversation 开关（ADR-0008d）；{ dangerous?: boolean }
   mvu_capabilities: Record<string, unknown>
+  // 最后一条消息预览（派生字段，仅列表接口返回）；首页最近对话卡片用
+  last_message_preview?: string | null
   created_at: string
   updated_at: string
 }

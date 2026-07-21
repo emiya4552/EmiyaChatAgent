@@ -64,6 +64,6 @@ const option = computed(() => {
 </script>
 
 <style scoped>
-.chart-wrapper { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+.chart-wrapper { background: var(--color-bg-surface); border-radius: 10px; padding: 20px; box-shadow: var(--shadow-sm); }
 .chart-title { margin: 0 0 12px; font-size: 16px; }
 </style>

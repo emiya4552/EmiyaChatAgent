@@ -1,11 +1,17 @@
 <template>
   <PageShell maxWidth="800px">
-    <div class="page-header">
-      <n-button text @click="$router.push('/chat')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回聊天
-      </n-button>
-      <h2 class="page-title">我的记忆</h2>
+    <WorkspaceHeader eyebrow="记忆与感知" title="我的记忆" description="查看、筛选并管理角色对你的长期记忆。">
+      <template #actions>
+        <n-popconfirm @positive-click="handleClearAll" v-if="total > 0">
+          <template #trigger>
+            <n-button type="error" ghost>清空全部</n-button>
+          </template>
+          确定清空所有记忆吗？此操作不可恢复。
+        </n-popconfirm>
+      </template>
+    </WorkspaceHeader>
+
+    <div class="filter-bar">
       <n-select
         v-model:value="categoryFilter"
         :options="categoryOptions"
@@ -33,12 +39,6 @@
       <n-checkbox v-if="memories.length > 0" :checked="isAllSelected" @update:checked="toggleSelectAll">
         全选
       </n-checkbox>
-      <n-popconfirm @positive-click="handleClearAll" v-if="total > 0">
-        <template #trigger>
-          <n-button size="small" type="error" ghost>清空全部</n-button>
-        </template>
-        确定清空所有记忆吗？此操作不可恢复。
-      </n-popconfirm>
     </div>
 
     <n-spin :show="loading">
@@ -111,6 +111,7 @@ import { ref, computed, onMounted } from 'vue'
 import { NButton, NCheckbox, NIcon, NSelect, NSpin, NEmpty, NTag, NPopconfirm, NPagination, useMessage } from 'naive-ui'
 import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { fetchMemories, deleteMemory, clearAllMemories } from '../api/memory'
 import { fetchConversations } from '../api/conversation'
 import type { Memory, Conversation } from '../types'
@@ -300,15 +301,14 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.page-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
-.page-title { flex: 1; margin: 0; font-size: 20px; white-space: nowrap; }
+.filter-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
 .memory-list { display: flex; flex-direction: column; gap: 12px; }
 .memory-card { background: var(--color-bg-surface); border-radius: var(--radius-md); padding: 20px 24px; box-shadow: var(--shadow-sm); }
 .memory-card.selected { border: 2px solid var(--color-primary); background: var(--color-primary-bg); }
 .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .card-left { display: flex; align-items: center; gap: 8px; }
 .card-tags { display: flex; gap: 6px; flex-wrap: wrap; }
-.batch-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #fff3cd; border-radius: 8px; margin-bottom: 8px; }
+.batch-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: color-mix(in srgb, var(--accent-strong) 20%, var(--color-bg-surface)); color: var(--color-text); border-radius: 8px; margin-bottom: 8px; }
 .batch-count { font-size: 14px; color: #856404; flex: 1; }
 .importance { font-size: 13px; }
 .card-content { margin: 0 0 8px; font-size: 15px; line-height: 1.6; }

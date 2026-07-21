@@ -63,7 +63,7 @@ const option = computed(() => {
         lineStyle: { color: '#667eea' },
         itemStyle: { color: '#667eea' },
         label: { show: arc.length <= 30, position: 'top', fontSize: 16, formatter: (p: any) => p.data.label },
-        areaStyle: { color: 'rgba(102, 126, 234, 0.1)' },
+        areaStyle: { color: 'rgba(168, 98, 82, 0.1)' },
       }],
     }
   }
@@ -85,16 +85,16 @@ const option = computed(() => {
         label: d.dominant_emotion ? EMOTION_EMOJI[d.dominant_emotion] || '' : '',
       })),
       smooth: true,
-      lineStyle: { color: '#667eea' },
-      itemStyle: { color: '#667eea' },
+      lineStyle: { color: '#a86252' },
+      itemStyle: { color: '#a86252' },
       label: { show: trend.length <= 10, position: 'top', fontSize: 16 },
-      areaStyle: { color: 'rgba(102, 126, 234, 0.1)' },
+      areaStyle: { color: 'rgba(168, 98, 82, 0.1)' },
     }],
   }
 })
 </script>
 
 <style scoped>
-.chart-wrapper { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+.chart-wrapper { background: var(--color-bg-surface); border-radius: 10px; padding: 20px; box-shadow: var(--shadow-sm); }
 .chart-title { margin: 0 0 12px; font-size: 16px; }
 </style>

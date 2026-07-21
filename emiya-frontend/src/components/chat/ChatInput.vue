@@ -57,7 +57,7 @@ function stop() {
 .chat-input-container {
   display: flex;
   gap: 10px;
-  padding: 12px 16px;
+  padding: 14px 28px;
   background: var(--color-bg-input);
   border-top: 1px solid var(--color-border-light);
   align-items: flex-end;
@@ -66,8 +66,10 @@ function stop() {
   flex: 1;
   resize: none;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  min-height: 46px;
+  box-sizing: border-box;
+  border-radius: var(--radius-md);
+  padding: 11px 14px;
   font-size: 14px;
   font-family: inherit;
   line-height: 1.5;
@@ -79,6 +81,8 @@ function stop() {
 }
 .send-btn,
 .stop-btn {
+  min-width: 76px;
+  min-height: 46px;
   padding: 8px 20px;
   border: none;
   border-radius: var(--radius-sm);
@@ -97,5 +101,9 @@ function stop() {
 .stop-btn {
   background: #e74c3c;
   color: #fff;
+}
+
+@media (max-width: 720px) {
+  .chat-input-container { padding: 10px 12px; }
 }
 </style>

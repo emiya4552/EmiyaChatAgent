@@ -1,18 +1,20 @@
 <template>
   <PageShell maxWidth="720px">
-    <div class="page-header">
-      <n-button text @click="$router.back()">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回
-      </n-button>
-      <h2 class="page-title">{{ persona?.name || '加载中...' }}</h2>
-      <n-button v-if="persona && !persona.is_template" size="small" @click="$router.push(`/personas/${persona.id}/edit`)">
-        编辑
-      </n-button>
-      <n-button v-if="persona" size="small" type="info" @click="onExport">
-        导出 PNG
-      </n-button>
-    </div>
+    <WorkspaceHeader
+      eyebrow="角色卡"
+      :title="persona?.name || '加载中...'"
+      backTo="/personas"
+      backLabel="所有角色"
+    >
+      <template #actions>
+        <n-button v-if="persona && !persona.is_template" @click="$router.push(`/personas/${persona.id}/edit`)">
+          编辑
+        </n-button>
+        <n-button v-if="persona" type="primary" @click="onExport">
+          导出 PNG
+        </n-button>
+      </template>
+    </WorkspaceHeader>
 
     <n-spin :show="loading">
       <template v-if="persona">
@@ -114,7 +116,7 @@
         <n-card v-if="relationship" title="你和 TA" class="detail-card relationship-card">
           <div class="rel-main">
             <span class="rel-level">{{ relationship.level_name }}</span>
-            <n-progress type="line" :percentage="relationship.affinity_score" :height="8" :show-indicator="false" color="#7c5cfc" rail-color="#f0e8ff" style="flex:1; max-width: 200px;" />
+            <n-progress type="line" :percentage="relationship.affinity_score" :height="8" :show-indicator="false" color="var(--color-primary)" rail-color="var(--accent-soft)" style="flex:1; max-width: 200px;" />
             <span class="rel-score">{{ Math.round(relationship.affinity_score) }}%</span>
           </div>
           <div class="rel-meta">
@@ -168,6 +170,7 @@ import {
 } from 'naive-ui'
 import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { fetchPersonaDetail, exportPersonaUrl } from '../api/persona'
 import { fetchRelationship } from '../api/relationship'
 import type { PersonaDetail, Relationship } from '../types'
@@ -254,7 +257,7 @@ function onExport() {
 <style scoped>
 .page-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
 .page-title { flex: 1; margin: 0; font-size: 20px; white-space: nowrap; }
-.detail-card { margin-bottom: 16px; border-radius: var(--radius-md); }
+.detail-card { margin-bottom: 16px; border-radius: var(--radius-md); background: var(--color-bg-surface); }
 .info-desc { margin: 6px 0; line-height: 1.6; color: var(--color-text-secondary); }
 .info-na { color: var(--color-text-placeholder); font-style: italic; }
 .info-meta { font-size: 13px; color: var(--color-text-tertiary); }
@@ -269,19 +272,19 @@ function onExport() {
   max-height: 200px;
   overflow-y: auto;
 }
-.relationship-card { background: linear-gradient(135deg, #faf8ff, #f5f0ff); }
+.relationship-card { background: color-mix(in srgb, var(--accent) 8%, var(--color-bg-surface)); }
 .rel-main { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.rel-level { font-size: 18px; font-weight: 600; color: #7c5cfc; }
-.rel-score { font-size: 14px; color: #7c5cfc; font-weight: 600; }
-.rel-meta { display: flex; gap: 8px; font-size: 13px; color: #888; margin-bottom: 8px; }
+.rel-level { font-size: 18px; font-weight: 600; color: var(--color-primary); }
+.rel-score { font-size: 14px; color: var(--color-primary); font-weight: 600; }
+.rel-meta { display: flex; gap: 8px; font-size: 13px; color: var(--color-text-secondary); margin-bottom: 8px; }
 .rel-milestones { display: flex; flex-wrap: wrap; gap: 4px; }
 
 .alt-list { margin: 4px 0 0; padding-left: 20px; }
 .alt-list li { margin: 4px 0; line-height: 1.5; color: var(--color-text-secondary); }
-.alt-tag { color: #aaa; font-size: 12px; margin-right: 4px; }
+.alt-tag { color: var(--color-text-tertiary); font-size: 12px; margin-right: 4px; }
 
 .card-meta-card { background: var(--color-bg-surface-elevated, #fafafa); }
-.mvu-card { background: var(--color-bg-surface-elevated, #fafafa); }
+.mvu-card { background: var(--color-bg-elevated); }
 .mvu-head {
   display: flex;
   align-items: center;
@@ -366,7 +369,7 @@ function onExport() {
 .mvu-feature-val { font-weight: 600; color: var(--color-text-secondary); }
 .mvu-warnings {
   margin-top: 10px;
-  color: #d03050;
+  color: var(--color-danger);
   font-size: 12px;
   line-height: 1.5;
 }

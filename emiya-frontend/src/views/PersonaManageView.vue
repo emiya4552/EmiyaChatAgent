@@ -1,23 +1,24 @@
 <template>
   <PageShell>
-    <div class="page-header">
-      <n-button text @click="$router.push('/chat')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回聊天
-      </n-button>
-      <h2 class="page-title">角色卡管理</h2>
-      <n-button type="primary" @click="showImport = true">
-        <template #icon><n-icon><DownloadOutline /></n-icon></template>
-        导入角色卡
-      </n-button>
-      <n-button
-        type="primary"
-        :disabled="customCount >= 50"
-        @click="$router.push('/personas/create')"
-      >
-        + 新建
-      </n-button>
-    </div>
+    <WorkspaceHeader
+      eyebrow="创作资产"
+      title="角色卡"
+      description="导入、创建并管理你的角色卡。"
+    >
+      <template #actions>
+        <n-button @click="showImport = true">
+          <template #icon><n-icon><DownloadOutline /></n-icon></template>
+          导入
+        </n-button>
+        <n-button
+          type="primary"
+          :disabled="customCount >= 50"
+          @click="$router.push('/personas/create')"
+        >
+          + 新建角色
+        </n-button>
+      </template>
+    </WorkspaceHeader>
 
     <div class="page-content">
       <n-spin :show="loading">
@@ -25,12 +26,10 @@
           <n-empty description="暂无角色卡" />
         </div>
 
-        <div v-else class="persona-list">
-          <div v-for="p in personas" :key="p.id" class="persona-card" @click="$router.push(`/personas/${p.id}`)">
-            <div class="card-left">
-              <div v-if="p.avatar_url" class="card-avatar" :style="{ backgroundImage: `url(${p.avatar_url})` }" />
-              <div v-else class="card-avatar-placeholder" :style="{ background: avatarColor(p.name) }">{{ p.name[0] }}</div>
-            </div>
+        <div v-else class="asset-list">
+          <div v-for="p in personas" :key="p.id" class="asset-card" @click="$router.push(`/personas/${p.id}`)">
+            <div v-if="p.avatar_url" class="asset-lead" :style="{ backgroundImage: `url(${p.avatar_url})` }" />
+            <div v-else class="asset-lead" :style="{ background: avatarColor(p.name) }">{{ p.name[0] }}</div>
             <div class="card-body">
               <div class="card-name-row">
                 <h3 class="card-name">{{ p.name }}</h3>
@@ -162,8 +161,9 @@ import {
   NUpload, NUploadDragger, NInput, NSpace, NDivider, NForm, NFormItem, NAlert,
   useMessage,
 } from 'naive-ui'
-import { ArrowBack, DownloadOutline, CloudUploadOutline } from '@vicons/ionicons5'
+import { DownloadOutline, CloudUploadOutline } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import { avatarColor } from '../utils/avatar'
 import { fetchPersonas, deletePersona, importParse, importConfirm } from '../api/persona'
 import type { PersonaListItem, ImportParseResult } from '../types'
@@ -276,46 +276,9 @@ async function onConfirmImport() {
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-.page-title { flex: 1; margin: 0; font-size: 20px; white-space: nowrap; }
 .page-content { min-height: 200px; }
-.persona-list { display: flex; flex-direction: column; gap: 12px; }
-.persona-card {
-  display: flex;
-  background: var(--color-bg-surface);
-  border-radius: var(--radius-md);
-  padding: 20px 24px;
-  box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
-}
-.persona-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
-.card-left { margin-right: 16px; }
-.card-avatar, .card-avatar-placeholder {
-  width: 56px; height: 56px; border-radius: 10px;
-  background-size: cover; background-position: center;
-}
-.card-avatar-placeholder {
-  color: #fff; display: flex; align-items: center; justify-content: center;
-  font-size: 24px; font-weight: 600;
-}
-.card-body { flex: 1; min-width: 0; }
-.card-name-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.card-name { margin: 0; font-size: 16px; }
-.card-text {
-  margin: 0 0 4px; font-size: 14px; color: var(--color-text-secondary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 400px;
-}
-.card-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
-.card-actions {
-  display: flex; flex-direction: column; justify-content: center; gap: 4px; margin-left: 16px;
-}
+/* 卡片皮肤统一到全局 styles/asset-list.css（.asset-list / .asset-card / .card-*） */
+.card-text { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty-state { padding: 60px 0; }
 .limit-hint { text-align: center; color: #e67e22; font-size: 13px; margin-top: 8px; }
 
@@ -327,7 +290,7 @@ async function onConfirmImport() {
 .dup-warn { color: #e67e22; font-size: 13px; margin: 4px 0 0; }
 .mvu-banner { margin: 12px 0; }
 .mvu-banner-list { margin: 8px 0; padding-left: 24px; line-height: 1.7; font-size: 13px; }
-.mvu-banner-list code { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.mvu-banner-list code { background: color-mix(in srgb, var(--color-text) 10%, transparent); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 .mvu-banner-note { margin: 6px 0 0; font-size: 12px; color: var(--color-text-tertiary); }
 .mvu-compat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .mvu-compat-text { font-size: 12px; color: var(--color-text-secondary); }

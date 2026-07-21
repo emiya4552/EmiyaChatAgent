@@ -1,16 +1,13 @@
 <template>
   <PageShell maxWidth="1100px">
-    <div class="page-header">
-      <n-button text @click="$router.push('/chat')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回聊天
-      </n-button>
-      <h2 class="page-title">情绪仪表盘</h2>
-      <n-button-group>
-        <n-button :type="days === 7 ? 'primary' : 'default'" :disabled="isSingleConvMode" @click="switchDays(7)">7天</n-button>
-        <n-button :type="days === 30 ? 'primary' : 'default'" :disabled="isSingleConvMode" @click="switchDays(30)">30天</n-button>
-      </n-button-group>
-    </div>
+    <WorkspaceHeader eyebrow="记忆与感知" title="情绪仪表盘" description="查看角色情绪的分布与趋势。">
+      <template #actions>
+        <n-button-group>
+          <n-button :type="days === 7 ? 'primary' : 'default'" :disabled="isSingleConvMode" @click="switchDays(7)">7天</n-button>
+          <n-button :type="days === 30 ? 'primary' : 'default'" :disabled="isSingleConvMode" @click="switchDays(30)">30天</n-button>
+        </n-button-group>
+      </template>
+    </WorkspaceHeader>
 
     <!-- Filter 顶栏：persona + conv 级联 -->
     <div class="filter-bar">
@@ -73,6 +70,7 @@ import {
 } from 'naive-ui'
 import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import WorkspaceHeader from '../components/layout/WorkspaceHeader.vue'
 import {
   fetchEmotionTrend, fetchEmotionDistribution, fetchEmotionCalendar,
   fetchScopePersonas, fetchScopeConversations,
