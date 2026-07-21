@@ -1,20 +1,29 @@
 <template>
-  <div v-if="relationship" class="relationship-bar">
-    <span class="rel-level">{{ relationship.level_name }}</span>
-    <span class="rel-sep">·</span>
-    <span>已聊 {{ relationship.total_messages }} 条消息</span>
-    <n-progress
-      class="rel-progress"
-      type="line"
-      :percentage="levelProgress"
-      :height="6"
-      :show-indicator="false"
-      color="#a86252"
-      rail-color="#eadccf"
-    />
-    <span class="rel-score">{{ scoreText }}</span>
+  <div class="relationship-stack">
+    <div class="relationship-bar">
+      <span v-if="mood" class="mood-summary">
+        <span class="mood-emoji" aria-hidden="true">{{ moodEmoji }}</span>
+        {{ mood }}<template v-if="moodIntensity != null"> · 强度 {{ moodIntensity }}/10</template>
+      </span>
+      <span v-if="mood" class="rel-divider" aria-hidden="true"></span>
 
-    <!-- 好感度变动提示 -->
+      <template v-if="relationship">
+        <strong class="relationship-title">你和 {{ personaName }}</strong>
+        <n-progress
+          class="rel-progress"
+          type="line"
+          :percentage="levelProgress"
+          :height="6"
+          :show-indicator="false"
+          color="#a86252"
+          rail-color="#eadccf"
+        />
+        <span class="rel-level">{{ relationship.level_name }} {{ levelProgress }}%</span>
+        <span class="rel-score">· {{ scoreText }}</span>
+      </template>
+      <span v-else class="rel-new">这是你们的第一次对话</span>
+    </div>
+
     <n-alert
       v-if="showAffinityDelta"
       class="rel-alert"
@@ -44,9 +53,6 @@
       {{ milestoneMsg }}
     </n-alert>
   </div>
-  <div v-else class="relationship-bar empty">
-    <span class="rel-new">这是你们的第一次对话</span>
-  </div>
 </template>
 
 <script setup lang="ts">
@@ -74,9 +80,17 @@ function calcLevelProgress(affinity: number, level: number): number {
 interface Props {
   relationship: Relationship | null
   personaName: string
+  mood?: string | null
+  moodIntensity?: number | null
 }
 
 const props = defineProps<Props>()
+
+const MOOD_EMOJI_MAP: Record<string, string> = {
+  '开心': '😊', '平静': '☾', '低落': '☂', '焦虑': '◌', '愤怒': '⚡',
+  '兴奋': '✦', '疲惫': '☁', '困惑': '?', '感动': '♡', '思念': '☾',
+}
+const moodEmoji = computed(() => MOOD_EMOJI_MAP[props.mood || ''] || '☾')
 
 const showLevelUp = ref(false)
 const showMilestone = ref(false)
@@ -150,31 +164,55 @@ defineExpose({ showAffinityChange })
 </script>
 
 <style scoped>
+.relationship-stack {
+  flex: none;
+  border-bottom: 1px solid var(--color-border-light);
+  background: var(--color-primary-bg);
+}
 .relationship-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background: var(--color-primary-bg);
-  border-bottom: 1px solid var(--color-border-light);
-  flex-wrap: wrap;
-  font-size: 13px;
+  min-height: 34px;
+  gap: 9px;
+  padding: 4px 28px;
+  box-sizing: border-box;
+  overflow: hidden;
+  font-size: 12px;
   color: var(--color-text-secondary);
   transition: all var(--transition-normal);
 }
-.relationship-bar.empty {
+.mood-summary,
+.relationship-title,
+.rel-level,
+.rel-score,
+.rel-new {
+  flex: none;
+  white-space: nowrap;
+}
+.mood-summary {
   color: var(--color-text-tertiary);
+}
+.mood-emoji {
+  margin-right: 3px;
+  color: var(--accent-strong);
+}
+.rel-divider {
+  width: 1px;
+  height: 15px;
+  flex: none;
+  background: var(--color-border);
+}
+.relationship-title {
+  color: var(--color-text);
+  font-weight: 600;
 }
 .rel-level {
   font-weight: 600;
   color: var(--color-primary);
 }
-.rel-sep {
-  color: var(--color-border);
-}
 .rel-progress {
-  flex: 1;
-  max-width: 120px;
+  width: 110px;
+  flex: none;
   min-width: 60px;
 }
 .rel-score {
@@ -185,12 +223,18 @@ defineExpose({ showAffinityChange })
   font-style: italic;
 }
 .rel-alert {
-  width: 100%;
-  margin-top: 4px;
+  margin: 0 28px 6px;
   animation: fadeIn 0.3s ease;
 }
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 720px) {
+  .relationship-bar { padding-inline: 14px; }
+  .rel-score { display: none; }
+  .rel-progress { width: 72px; }
+  .rel-alert { margin-inline: 14px; }
 }
 </style>

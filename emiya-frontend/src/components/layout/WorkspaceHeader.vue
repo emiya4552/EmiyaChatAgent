@@ -1,8 +1,9 @@
 <!-- 统一的工作区页头:eyebrow + 衬线标题 + 描述 + 右侧动作区(+可选返回链接)。 -->
 <template>
   <header class="workspace-header">
+    <!-- 返回按钮钉在副导航行（共享 BackButton，内部 teleport 到 #subnav-back-anchor） -->
+    <BackButton :to="backTo" :label="backLabel" />
     <div class="wh-main">
-      <RouterLink v-if="backTo" class="wh-back" :to="backTo">← {{ backLabel }}</RouterLink>
       <p v-if="eyebrow" class="wh-eyebrow">{{ eyebrow }}</p>
       <h1 class="wh-title">{{ title }}</h1>
       <p v-if="description" class="wh-desc">{{ description }}</p>
@@ -14,6 +15,8 @@
 </template>
 
 <script setup lang="ts">
+import BackButton from './BackButton.vue'
+
 withDefaults(
   defineProps<{
     title: string
@@ -37,16 +40,7 @@ withDefaults(
 .wh-main {
   min-width: 0;
 }
-.wh-back {
-  display: inline-block;
-  margin-bottom: 10px;
-  color: var(--color-text-tertiary);
-  font-size: 13px;
-  text-decoration: none;
-}
-.wh-back:hover {
-  color: var(--color-primary);
-}
+/* 返回按钮样式已移到共享组件 BackButton.vue */
 .wh-eyebrow {
   margin: 0 0 8px;
   color: var(--color-eyebrow);

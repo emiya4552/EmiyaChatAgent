@@ -308,7 +308,7 @@ onMounted(async () => {
 .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .card-left { display: flex; align-items: center; gap: 8px; }
 .card-tags { display: flex; gap: 6px; flex-wrap: wrap; }
-.batch-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #fff3cd; border-radius: 8px; margin-bottom: 8px; }
+.batch-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: color-mix(in srgb, var(--accent-strong) 20%, var(--color-bg-surface)); color: var(--color-text); border-radius: 8px; margin-bottom: 8px; }
 .batch-count { font-size: 14px; color: #856404; flex: 1; }
 .importance { font-size: 13px; }
 .card-content { margin: 0 0 8px; font-size: 15px; line-height: 1.6; }

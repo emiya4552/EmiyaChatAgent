@@ -5,6 +5,17 @@
  * stores/theme.ts),故 naive-ui 挂在 body 的浮层也一并受夜间覆盖影响。
  * ===================================================================== */
 
+/* CSS 分层顺序（靠后＝优先级更高，且无视特异性）。只声明一次：
+ *   app-base   —— 本文件的基础令牌，下沉到最低层。这样用户级 / 角色卡级主题里的
+ *                 :root 覆盖在日间**和夜间**都能赢过内置的 :root[data-theme="night"]
+ *                 （夜间选择器特异性更高，不分层的话用户覆盖会在夜间静默失效）。
+ *   user-theme —— 用户级全站自定义 CSS（App 根注入，见 useCssThemeInjection）。
+ *   card-theme —— 角色卡自带 CSS（聊天页注入，优先级最高）。
+ * 用户 / 卡的 CSS 在注入时各自包 @layer user-theme{} / @layer card-theme{}。 */
+@layer app-base, user-theme, card-theme;
+
+@layer app-base {
+
 :root {
   /* ===== 品牌强调色(陶土) ===== */
   --color-primary: #a86252;
@@ -20,9 +31,11 @@
   --color-bg-page: #f2eee7;
   --color-bg-surface: #fffaf2;
   --color-bg-surface-2: #fffdf8;
+  --color-bg-surface-elevated: #fffdf8;
   --color-bg-header: #fffaf2;
   --color-bg-input: #fffefa;
   --color-bg-elevated: #fffaf2;
+  --color-bg-hover: rgba(168, 98, 82, 0.08);
 
   /* ===== 侧栏(暖色浅色面板) ===== */
   --color-sidebar-bg: #f7f1e8;
@@ -44,7 +57,9 @@
   --color-danger: #a74343;
 
   /* ===== 字体 ===== */
-  --font-serif: Georgia, "Songti SC", "Microsoft YaHei", serif;
+  /* 衬线展示字体：优先原型那款叙事衬线（本机装了才用，不下载 Web 字体），
+     依次回退到各平台的系统 CJK 宋体，最后到通用 serif。 */
+  --font-serif: "Noto Serif SC", "Source Han Serif SC", "Source Han Serif CN", Georgia, "Songti SC", "SimSun", "Microsoft YaHei", serif;
   --font-sans: Inter, "Microsoft YaHei", system-ui, -apple-system, sans-serif;
 
   /* ===== 圆角 ===== */
@@ -62,9 +77,16 @@
   --transition-fast: 0.15s ease;
   --transition-normal: 0.3s ease;
 
+  /* ===== 滚动条(随主题) ===== */
+  --scrollbar-thumb: rgba(120, 92, 62, 0.30);
+  --scrollbar-thumb-hover: rgba(120, 92, 62, 0.52);
+
   /* ===== 顶部导航高度(供各页留白使用) ===== */
   --nav-offset: 74px;
   --nav-offset-sub: 132px;
+  --chat-primary-height: 68px;
+  --chat-conversation-height: 48px;
+  --chat-chrome-offset: 116px;
 }
 
 :root[data-theme="night"] {
@@ -80,9 +102,11 @@
   --color-bg-page: #1f2329;
   --color-bg-surface: #292e35;
   --color-bg-surface-2: #22272e;
+  --color-bg-surface-elevated: #2f353d;
   --color-bg-header: #292e35;
   --color-bg-input: #20252b;
   --color-bg-elevated: #2f353d;
+  --color-bg-hover: rgba(255, 255, 255, 0.05);
 
   --color-sidebar-bg: #22262c;
   --color-sidebar-text: #d6cfc4;
@@ -103,7 +127,12 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 5px 14px rgba(0, 0, 0, 0.30);
   --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.45);
+
+  --scrollbar-thumb: rgba(232, 226, 216, 0.22);
+  --scrollbar-thumb-hover: rgba(232, 226, 216, 0.42);
 }
+
+}  /* end @layer app-base —— 以上两个 :root 令牌块都属于 app-base 层 */
 
 /* ===== 全局基础 ===== */
 * {
@@ -125,4 +154,27 @@ body {
 
 #app {
   min-height: 100vh;
+}
+
+/* ===== 主题化滚动条：随日/夜切换，避免夜间露出浅色系统滚动条 =====
+   刻意隐藏滚动条的容器（如聊天顶栏会话轨道）用更高优先级的 scoped 规则覆盖，不受影响。 */
+* {
+  scrollbar-width: thin;                              /* Firefox */
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: 2px solid transparent;               /* 配合 padding-box 让拇指更细、留出内边距 */
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }

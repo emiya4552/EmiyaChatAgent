@@ -386,7 +386,7 @@ async function handleSave() {
 .blocks-explainer { margin-bottom: 12px; }
 .blocks-explainer-list { margin: 6px 0 6px 18px; padding: 0; line-height: 1.7; }
 .blocks-explainer code {
-  background: rgba(0, 0, 0, 0.06);
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
   padding: 1px 5px;
   border-radius: 3px;
   font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;

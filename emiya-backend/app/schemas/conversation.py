@@ -73,6 +73,8 @@ class ConversationResponse(BaseModel):
     mvu_state: dict | None = None
     # MVU 卡 UI 危险能力 per-conversation 开关（ADR-0008d）；{"dangerous": bool}，默认 {} = 全拒
     mvu_capabilities: dict = {}
+    # 最后一条消息的预览文本（派生字段，非 DB 列）；仅列表接口填充，供首页最近对话卡片展示
+    last_message_preview: str | None = None
     created_at: datetime
     updated_at: datetime
 

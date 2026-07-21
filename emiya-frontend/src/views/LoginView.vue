@@ -80,7 +80,7 @@ async function handleLogin() {
   try {
     await authStore.login(form.value)
     message.success('登录成功')
-    router.push('/chat')
+    router.push('/home')
   } catch (err: any) {
     const detail = err.response?.data?.detail || '登录失败'
     message.error(detail)

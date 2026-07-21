@@ -1,6 +1,7 @@
-<!-- 全站两层顶部胶囊导航(替代旧的深色左侧栏区块导航)。 -->
+<!-- 全站顶部导航；聊天路由使用带上下文与可折叠会话栏的专用形态。 -->
 <template>
-  <nav class="app-nav" aria-label="主导航">
+  <ChatNavigation v-if="mainActive === 'chat'" />
+  <nav v-else class="app-nav" aria-label="主导航">
     <RouterLink
       v-for="item in mainNav"
       :key="item.id"
@@ -17,63 +18,7 @@
       {{ themeStore.mode === 'night' ? '月' : '日' }}
     </button>
   </nav>
-  <nav
-    v-if="mainActive === 'chat'"
-    class="app-subnav conversation-subnav"
-    aria-label="对话列表"
-  >
-    <button
-      type="button"
-      class="subnav-item new-conversation-button"
-      @click="chatUi.requestNewConv()"
-    >＋ 新建对话</button>
-
-    <span v-if="conversationStore.loading && !conversationStore.list.length" class="conversation-status">
-      正在加载…
-    </span>
-    <span v-else-if="!conversationStore.list.length" class="conversation-status">
-      暂无对话
-    </span>
-
-    <div
-      v-for="conversation in conversationStore.list"
-      :key="conversation.id"
-      :class="['conversation-pill', { active: conversation.id === conversationStore.currentId }]"
-    >
-      <button
-        type="button"
-        class="conversation-select"
-        :aria-current="conversation.id === conversationStore.currentId ? 'page' : undefined"
-        @click="conversationStore.setCurrent(conversation.id)"
-      >
-        <span
-          class="conversation-avatar"
-          :style="{ background: avatarColor(conversation.persona_name || 'AI') }"
-          aria-hidden="true"
-        >{{ (conversation.persona_name || 'AI')[0] }}</span>
-        <span class="conversation-copy">
-          <span class="conversation-title" :title="conversation.title || '新对话'">
-            {{ conversation.title || '新对话' }}
-          </span>
-          <small>{{ conversation.persona_name || '未设人设' }} · {{ relativeTime(conversation.updated_at) }}</small>
-        </span>
-      </button>
-      <n-dropdown
-        trigger="click"
-        :options="conversationMenuOptions"
-        @select="(key: string) => handleConversationMenu(key, conversation.id)"
-      >
-        <button
-          type="button"
-          class="conversation-menu"
-          :aria-label="`管理对话：${conversation.title || '新对话'}`"
-          title="对话操作"
-          @click.stop
-        >···</button>
-      </n-dropdown>
-    </div>
-  </nav>
-  <nav v-else-if="subNav.length" class="app-subnav" aria-label="副导航">
+  <nav v-if="mainActive !== 'chat' && subNav.length" class="app-subnav" aria-label="副导航">
     <RouterLink
       v-for="item in subNav"
       :key="item.label"
@@ -82,30 +27,28 @@
       :class="{ active: isSubActive(item) }"
     >{{ item.label }}</RouterLink>
   </nav>
+  <!-- 返回按钮的固定槽位：与副导航同一行、居左。子页（WorkspaceHeader 带 backTo）用
+       <Teleport> 把返回按钮投送到这里，使其钉在副导航行、不随正文滚动。空时不可见。 -->
+  <div
+    v-if="mainActive !== 'chat' && subNav.length"
+    id="subnav-back-anchor"
+    class="subnav-back-anchor"
+  ></div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { NDropdown, useMessage } from 'naive-ui'
 import { useThemeStore } from '../../stores/theme'
-import { useChatUiStore } from '../../stores/chatUi'
-import { useConversationStore } from '../../stores/conversation'
-import { avatarColor } from '../../utils/avatar'
+import ChatNavigation from './ChatNavigation.vue'
 
 type SubItem = { label: string; to: string; tab?: string }
 
 const route = useRoute()
 const themeStore = useThemeStore()
-const chatUi = useChatUiStore()
-const conversationStore = useConversationStore()
-const message = useMessage()
-
-const conversationMenuOptions = [
-  { label: '删除对话', key: 'delete' },
-]
 
 const mainNav = [
+  { id: 'home', label: '首页', to: '/home' },
   { id: 'chat', label: '对话', to: '/chat' },
   { id: 'studio', label: '创作资产', to: '/personas' },
   { id: 'insights', label: '记忆与感知', to: '/memories' },
@@ -117,6 +60,7 @@ const INSIGHTS_RE = /^\/(memories|mood)/
 
 const mainActive = computed(() => {
   const path = route.path
+  if (path.startsWith('/home')) return 'home'
   if (path.startsWith('/chat')) return 'chat'
   if (STUDIO_RE.test(path)) return 'studio'
   if (INSIGHTS_RE.test(path)) return 'insights'
@@ -153,30 +97,6 @@ const subNav = computed<SubItem[]>(() => {
   }
 })
 
-function relativeTime(dateStr: string): string {
-  const time = new Date(dateStr).getTime()
-  if (!Number.isFinite(time)) return ''
-  const diff = Math.max(0, Date.now() - time)
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return '刚刚'
-  if (mins < 60) return `${mins}分钟前`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}小时前`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}天前`
-  return new Date(dateStr).toLocaleDateString()
-}
-
-async function handleConversationMenu(key: string, conversationId: string) {
-  if (key !== 'delete') return
-  try {
-    await conversationStore.deleteById(conversationId)
-    message.success('对话已删除')
-  } catch {
-    message.error('删除失败')
-  }
-}
-
 function isSubActive(item: SubItem) {
   if (item.tab) {
     const active = typeof route.query.tab === 'string' ? route.query.tab : 'profile'
@@ -210,14 +130,17 @@ function isSubActive(item: SubItem) {
   top: 78px;
   z-index: 199;
 }
-.conversation-subnav {
-  width: min(1180px, calc(100vw - 32px));
-  justify-content: flex-start;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
+/* 返回按钮槽位：与副导航同一行、居左；min-height 对齐胶囊组行高使按钮垂直居中。
+   实际的返回按钮由 WorkspaceHeader teleport 进来（样式在其 scoped 里，元素保留 data-v）。 */
+.subnav-back-anchor {
+  position: fixed;
+  top: 78px;
+  left: clamp(16px, 4vw, 40px);
+  z-index: 199;
+  display: flex;
+  align-items: center;
+  min-height: 42px;
 }
-
 .app-nav a,
 .app-subnav .subnav-item,
 .theme-toggle {
@@ -241,94 +164,6 @@ function isSubActive(item: SubItem) {
   color: #fffaf4;
   background: var(--accent-strong);
 }
-.new-conversation-button {
-  flex: none;
-}
-.conversation-status {
-  align-self: center;
-  padding: 0 10px;
-  color: var(--color-text-tertiary);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.conversation-pill {
-  display: flex;
-  flex: none;
-  align-items: center;
-  color: var(--color-text-secondary);
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
-}
-.conversation-pill:hover {
-  color: var(--color-text);
-  background: var(--color-primary-bg);
-}
-.conversation-pill.active {
-  color: var(--color-text);
-  border-color: color-mix(in srgb, var(--accent-strong) 52%, transparent);
-  background: var(--color-primary-light);
-}
-.conversation-select {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 4px 4px 5px;
-  color: inherit;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-.conversation-avatar {
-  display: grid;
-  width: 25px;
-  height: 25px;
-  flex: none;
-  place-items: center;
-  color: #fffaf4;
-  border-radius: 50%;
-  font: 600 11px var(--font-serif);
-}
-.conversation-copy {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-  text-align: left;
-}
-.conversation-title {
-  max-width: 170px;
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.conversation-copy small {
-  max-width: 170px;
-  overflow: hidden;
-  color: var(--color-text-tertiary);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.conversation-menu {
-  display: grid;
-  width: 26px;
-  height: 30px;
-  flex: none;
-  place-items: center;
-  padding: 0 7px 2px 1px;
-  color: inherit;
-  border: 0;
-  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  background: transparent;
-  font-weight: 700;
-  cursor: pointer;
-}
-.conversation-menu:hover {
-  color: var(--color-primary);
-}
 .theme-toggle {
   display: flex;
   align-items: center;
@@ -350,14 +185,15 @@ function isSubActive(item: SubItem) {
     max-width: 94vw;
     overflow-x: auto;
   }
-  .conversation-subnav {
-    width: 94vw;
-  }
   .app-nav {
     top: 8px;
   }
   .app-subnav {
     top: 60px;
+  }
+  .subnav-back-anchor {
+    top: 60px;
+    min-height: 36px;
   }
   .app-nav a,
   .app-subnav .subnav-item,

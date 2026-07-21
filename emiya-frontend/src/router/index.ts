@@ -5,7 +5,13 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      redirect: '/chat',
+      redirect: '/home',
+    },
+    {
+      path: '/home',
+      name: 'home',
+      component: () => import('../views/HomeView.vue'),
+      meta: { requiresAuth: true },
     },
     {
       path: '/login',
@@ -162,7 +168,7 @@ router.beforeEach((to, _from, next) => {
   if (to.meta.requiresAuth && !token) {
     next('/login')
   } else if ((to.path === '/login' || to.path === '/register') && token) {
-    next('/chat')
+    next('/home')
   } else {
     next()
   }

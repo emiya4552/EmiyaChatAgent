@@ -3,11 +3,13 @@ import { ref } from 'vue'
 import type { Conversation } from '../types'
 import * as convApi from '../api/conversation'
 import type { Relationship } from '../types'
+import { fetchPersonas } from '../api/persona'
 
 export const useConversationStore = defineStore('conversation', () => {
   const list = ref<Conversation[]>([])
   const currentId = ref<string | null>(null)
   const loading = ref(false)
+  const personaAvatarById = ref<Record<string, string | null>>({})
 
   // 当前对话的情绪氛围
   const currentMood = ref<string | null>(null)
@@ -20,6 +22,18 @@ export const useConversationStore = defineStore('conversation', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  async function fetchPersonaAvatars() {
+    const personas = await fetchPersonas('all')
+    personaAvatarById.value = Object.fromEntries(
+      personas.map((persona) => [persona.id, persona.avatar_url || null]),
+    )
+  }
+
+  function personaAvatarUrl(personaId: string | null): string | null {
+    if (!personaId) return null
+    return personaAvatarById.value[personaId] || null
   }
 
   async function create(
@@ -37,8 +51,11 @@ export const useConversationStore = defineStore('conversation', () => {
     await convApi.deleteConversation(id)
     list.value = list.value.filter((c) => c.id !== id)
     if (currentId.value === id) {
-      currentId.value = list.value[0]?.id || null
-      if (currentId.value === null) {
+      const nextId = list.value[0]?.id || null
+      if (nextId) {
+        setCurrent(nextId)
+      } else {
+        currentId.value = null
         // 删的是最后一个对话——清掉所有派生展示状态，避免 ChatMain 里残留旧消息
         const { useChatStore } = await import('./chat')
         useChatStore().clearMessages()
@@ -142,6 +159,7 @@ export const useConversationStore = defineStore('conversation', () => {
     list,
     currentId,
     loading,
+    personaAvatarById,
     currentMood,
     moodIntensity,
     recalledMemories,
@@ -161,6 +179,8 @@ export const useConversationStore = defineStore('conversation', () => {
     newMemoriesCount,
     setNewMemoriesCount,
     fetchList,
+    fetchPersonaAvatars,
+    personaAvatarUrl,
     create,
     deleteById,
     setCurrent,

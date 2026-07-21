@@ -21,9 +21,9 @@
           </n-empty>
         </div>
 
-        <div v-else class="preset-list">
-          <div v-for="p in list" :key="p.id" class="preset-card" @click="$router.push(`/regex-presets/${encodeURIComponent(p.id)}/edit`)">
-            <div class="preset-icon">R</div>
+        <div v-else class="asset-list">
+          <div v-for="p in list" :key="p.id" class="asset-card" @click="$router.push(`/regex-presets/${encodeURIComponent(p.id)}/edit`)">
+            <div class="asset-lead regex-lead">R</div>
             <div class="card-body">
               <div class="card-name-row">
                 <h3 class="card-name">{{ p.name }}</h3>
@@ -114,34 +114,8 @@ async function handleDelete(p: RegexPresetInfo) {
 </script>
 
 <style scoped>
-.page-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
-.page-title { flex: 1; margin: 0; font-size: 20px; white-space: nowrap; }
+/* 卡片皮肤统一到全局 styles/asset-list.css；此处仅留页面专属的引导块填色与空态 */
 .page-content { min-height: 200px; }
-.preset-list { display: flex; flex-direction: column; gap: 12px; }
-.preset-card {
-  display: flex; align-items: flex-start; background: var(--color-bg-surface); border-radius: var(--radius-md);
-  padding: 20px 24px; box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
-}
-.preset-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
-.preset-icon {
-  width: 56px; height: 56px; border-radius: var(--radius-md); flex-shrink: 0; margin-right: 16px;
-  background: var(--color-primary); color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 24px; font-weight: 700;
-}
-.card-body { flex: 1; min-width: 0; }
-.card-name-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
-.card-name { margin: 0; font-size: 17px; font-weight: 600; }
-.card-desc {
-  margin: 0 0 6px; font-size: 13px; color: var(--color-text-secondary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 520px;
-}
-.card-meta { margin: 0; font-size: 12px; color: var(--color-text-tertiary); }
-.card-actions {
-  display: flex; flex-direction: column; align-items: flex-end;
-  margin-left: 16px; flex-shrink: 0; gap: 2px;
-}
 .empty-state { padding: 60px 0; }
+.regex-lead { background: var(--color-primary); }
 </style>

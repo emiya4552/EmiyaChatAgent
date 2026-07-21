@@ -290,19 +290,6 @@
         </div>
       </n-collapse-item>
 
-      <n-collapse-item title="功能开关" name="features">
-        <div class="params-grid">
-          <n-form-item label="情感分析" label-placement="left">
-            <n-switch v-model:value="togglesLocal.analyze_emotion" />
-            <span class="switch-hint">感知系统总开关（ADR-0019）：情绪 + 好感度合并为回复后的一次上下文感知调用。关闭后跳过该调用——不写 EmotionRecord、不更新 mood/emoji、也不更新好感度。（"把关系告诉 AI"是另一回事，由模板的 relationship 块控制）</span>
-          </n-form-item>
-          <n-form-item label="卡界面危险能力" label-placement="left">
-            <n-switch :value="mvuDangerousLocal" :loading="mvuCapSaving" @update:value="onToggleMvuDangerous" />
-            <span class="switch-hint">ADR-0008d：允许卡界面（如手机终端）调用 LLM 生成（generateRaw，花 token）与修改会话楼层（setChatMessages）。默认关闭，仅对信任的卡开启。read/本地能力不受此限。</span>
-          </n-form-item>
-        </div>
-      </n-collapse-item>
-
       <n-collapse-item title="可见输出格式契约" name="output_contract">
         <div class="params-grid">
           <n-form-item label="执行模式" label-placement="left">

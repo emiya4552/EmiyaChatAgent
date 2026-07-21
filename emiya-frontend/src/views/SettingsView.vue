@@ -200,13 +200,30 @@
           <div class="section">
             <h3 class="section-title">全局 CSS 主题</h3>
             <p class="hint">
-              这里写的 CSS 对所有对话生效；角色卡自带样式会在全局样式之后注入，因此可以覆盖这里的规则。
+              这里写的 CSS <strong>对所有页面全站生效</strong>。推荐覆盖下方「令牌模板」里的
+              <code>--color-*</code> / 圆角 / 阴影等主题变量来换肤——这是受支持的稳定接口；直接改内部
+              class 属尽力而为、可能被组件样式覆盖。角色卡自带样式优先级更高，会覆盖这里的同名规则。
             </p>
+            <p class="hint">
+              万一自定义把界面搞坏了：在网址后加 <code>?safe</code>（如 <code>/settings?safe</code>）刷新，
+              即可进入安全模式、临时停用主题并一键清空。
+            </p>
+            <div class="css-presets" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px;">
+              <span style="font-size:13px;color:var(--color-text-secondary);">起手预设：</span>
+              <n-button
+                v-for="p in CSS_PRESETS"
+                :key="p.label"
+                size="small"
+                tertiary
+                @click="applyPreset(p.css)"
+              >{{ p.label }}</n-button>
+              <n-button size="small" tertiary @click="insertTokenTemplate">插入令牌模板</n-button>
+            </div>
             <n-input
               v-model:value="cssTheme"
               type="textarea"
               :autosize="{ minRows: 12, maxRows: 24 }"
-              placeholder="/* 示例：状态栏样式 */"
+              placeholder="/* 点上方「插入令牌模板」快速开始；或直接写 :root { --color-primary: … } */"
               class="css-input"
             />
             <div class="actions">
@@ -733,6 +750,124 @@ async function clearCssTheme() {
   }
 }
 
+// ── 自定义主题：令牌模板 + 起手预设 ──
+// 令牌模板：注释掉的「换肤核心集」，一键插入后取消注释改值即可。写在 :root 对日/夜都生效；
+// 只想改夜间就复制一份到 :root[data-theme="night"]。清单对齐 variables.css 的公开契约。
+const CSS_TOKEN_TEMPLATE = `/* ── EMIYA 主题令牌（改这里即可全站换肤，删掉不想动的行）──
+ * 写在 :root 日夜都生效；只改夜间就复制到 :root[data-theme="night"] { … } */
+:root {
+  /* 强调色（主色三态） */
+  /* --color-primary: #a86252; */
+  /* --color-primary-hover: #9c5d4e; */
+  /* --color-primary-pressed: #8a4f42; */
+
+  /* 背景（页面 / 卡片表面 / 抬升表面） */
+  /* --color-bg-page: #f2eee7; */
+  /* --color-bg-surface: #fffaf2; */
+  /* --color-bg-surface-elevated: #fffdf8; */
+  /* --color-bg-elevated: #fffaf2; */
+
+  /* 文本三级 */
+  /* --color-text: #253143; */
+  /* --color-text-secondary: #718093; */
+  /* --color-text-tertiary: #997250; */
+
+  /* 边框 */
+  /* --color-border: #d8cfc1; */
+
+  /* 圆角 / 阴影（质感） */
+  /* --radius-md: 10px; */
+  /* --shadow-md: 0 5px 14px rgba(74, 54, 32, 0.09); */
+}
+`
+
+const CSS_PRESETS: { label: string; css: string }[] = [
+  {
+    label: '石墨玻璃',
+    css: `:root{
+  --color-primary:#6ea8fe;--color-primary-hover:#8bbaff;--color-primary-pressed:#5a95f0;
+  --color-primary-light:rgba(110,168,254,0.16);--color-primary-bg:rgba(110,168,254,0.10);
+  --color-bg-page:#0e1116;
+  --color-bg-surface:rgba(30,36,46,0.66);--color-bg-surface-elevated:rgba(40,48,60,0.72);--color-bg-elevated:rgba(40,48,60,0.74);
+  --color-bg-header:rgba(24,29,37,0.72);--color-bg-input:rgba(18,22,28,0.75);--color-bg-hover:rgba(150,170,200,0.10);
+  --color-text:#e8edf5;--color-text-secondary:#a3b0c2;--color-text-tertiary:#71809a;
+  --color-border:rgba(150,170,200,0.18);--color-border-light:rgba(150,170,200,0.10);
+  --color-sidebar-bg:rgba(20,25,32,0.72);--color-sidebar-text:#cdd6e4;--color-sidebar-active:rgba(110,168,254,0.22);
+  --font-sans:"Inter","Segoe UI",system-ui,sans-serif;
+  --radius-sm:10px;--radius-md:14px;--radius-lg:20px;--radius-pill:999px;
+  --shadow-sm:0 2px 8px rgba(0,0,0,0.35);--shadow-md:0 8px 30px rgba(0,0,0,0.45);--shadow-lg:0 30px 70px rgba(0,0,0,0.6);
+  --scrollbar-thumb:rgba(160,180,210,0.25);--scrollbar-thumb-hover:rgba(160,180,210,0.45);
+}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background:radial-gradient(1200px 600px at 15% -10%,rgba(110,168,254,0.14),transparent 60%),radial-gradient(1000px 500px at 100% 0%,rgba(160,110,255,0.12),transparent 55%),radial-gradient(900px 600px at 50% 120%,rgba(80,200,220,0.10),transparent 60%);}
+#app{position:relative;z-index:1;}
+.n-card,.n-modal,.n-popover,.detail-card,.app-nav,.app-subnav{backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3);}
+.n-input{background-color:var(--color-bg-input)!important;}
+::selection{background:rgba(110,168,254,0.35);color:#0b1220;}
+`,
+  },
+  {
+    label: '奶油圆角',
+    css: `:root{
+  --color-primary:#e86c86;--color-primary-hover:#e15b78;--color-primary-pressed:#cf4d6a;
+  --color-primary-light:rgba(232,108,134,0.14);--color-primary-bg:rgba(232,108,134,0.09);
+  --color-bg-page:#fbeee9;--color-bg-surface:#ffffff;--color-bg-surface-elevated:#fff6f9;--color-bg-elevated:#ffffff;
+  --color-bg-header:#fff3ef;--color-bg-input:#ffffff;--color-bg-hover:rgba(232,108,134,0.10);
+  --color-text:#3f2f39;--color-text-secondary:#7a6670;--color-text-tertiary:#a08b96;
+  --color-border:#efd5dc;--color-border-light:#f6e6ea;
+  --color-sidebar-bg:#fff3ef;--color-sidebar-text:#5a4650;--color-sidebar-active:rgba(232,108,134,0.18);
+  --font-sans:"Nunito","Quicksand","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --radius-sm:14px;--radius-md:20px;--radius-lg:28px;--radius-pill:999px;
+  --shadow-sm:0 4px 14px rgba(232,108,134,0.14);--shadow-md:0 10px 30px rgba(232,108,134,0.18);--shadow-lg:0 24px 60px rgba(232,108,134,0.24);
+  --scrollbar-thumb:rgba(232,108,134,0.35);--scrollbar-thumb-hover:rgba(232,108,134,0.6);
+}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background:radial-gradient(700px 500px at 8% 0%,rgba(255,205,215,0.4),transparent 60%),radial-gradient(700px 500px at 100% 8%,rgba(205,222,255,0.35),transparent 60%),radial-gradient(800px 600px at 50% 115%,rgba(255,230,200,0.32),transparent 60%);}
+#app{position:relative;z-index:1;}
+.n-button,.n-tag,.n-input,.n-card,.detail-card,.app-nav,.app-subnav{border-radius:22px!important;}
+.n-input{background-color:#ffffff!important;border:1px solid var(--color-border)!important;}
+.n-button{font-weight:700!important;}
+::selection{background:rgba(232,108,134,0.3);}
+`,
+  },
+  {
+    label: '瑞士排版',
+    css: `:root{
+  --color-primary:#e2231a;--color-primary-hover:#c81d15;--color-primary-pressed:#a81811;
+  --color-primary-light:rgba(226,35,26,0.12);--color-primary-bg:rgba(226,35,26,0.07);
+  --color-bg-page:#f2f2ee;--color-bg-surface:#ffffff;--color-bg-surface-elevated:#ffffff;--color-bg-elevated:#ffffff;
+  --color-bg-header:#ffffff;--color-bg-input:#ffffff;--color-bg-hover:rgba(10,10,10,0.05);
+  --color-text:#0a0a0a;--color-text-secondary:#2c2c2c;--color-text-tertiary:#5c5c5c;
+  --color-border:#0a0a0a;--color-border-light:#c8c8c2;
+  --color-sidebar-bg:#ffffff;--color-sidebar-text:#0a0a0a;--color-sidebar-active:rgba(226,35,26,0.14);
+  --font-sans:"Space Mono","JetBrains Mono","IBM Plex Mono",ui-monospace,"Courier New",monospace;
+  --radius-sm:0;--radius-md:0;--radius-lg:0;--radius-pill:0;
+  --shadow-sm:none;--shadow-md:none;--shadow-lg:none;
+  --scrollbar-thumb:#0a0a0a;--scrollbar-thumb-hover:#333333;
+}
+#app{position:relative;z-index:1;}
+.app-nav{left:0!important;right:0!important;width:100%!important;top:0!important;transform:none!important;border-radius:0!important;border-bottom:2px solid #0a0a0a!important;background:#ffffff!important;justify-content:flex-start!important;gap:0!important;padding:0 6px!important;}
+.app-nav a,.app-nav .theme-toggle{border-radius:0!important;}
+.app-nav .theme-toggle{margin-left:auto!important;}
+.app-subnav{border-radius:0!important;border:2px solid #0a0a0a!important;}
+.n-card,.detail-card{border-radius:0!important;border:2px solid #0a0a0a!important;box-shadow:none!important;}
+.n-button,.n-input,.n-tag{border-radius:0!important;}
+.n-input{background-color:#ffffff!important;border:2px solid #0a0a0a!important;}
+.n-button{border:2px solid #0a0a0a!important;box-shadow:none!important;}
+h1,h2,h3,.section-title{text-transform:uppercase;letter-spacing:0.05em;}
+::selection{background:#e2231a;color:#ffffff;}
+`,
+  },
+]
+
+function insertTokenTemplate() {
+  const cur = cssTheme.value.replace(/\s*$/, '')
+  cssTheme.value = cur ? `${cur}\n\n${CSS_TOKEN_TEMPLATE}` : CSS_TOKEN_TEMPLATE
+}
+
+function applyPreset(css: string) {
+  // 载入预设到编辑器（替换当前内容），用户可再改，点「保存主题」才落库。
+  cssTheme.value = css
+}
+
 // ── 资料 ──
 const profileForm = ref({
   nickname: user.value?.nickname || '',
@@ -989,8 +1124,8 @@ async function doDeleteAccount() {
   color: var(--color-text-tertiary);
 }
 
-.danger-section { background: #fff5f5; border: 1px solid #ffd6d6; border-radius: 8px; padding: 20px; }
-.danger-title { color: #d03050; }
+.danger-section { background: color-mix(in srgb, var(--color-danger) 10%, var(--color-bg-surface)); border: 1px solid color-mix(in srgb, var(--color-danger) 35%, var(--color-border)); border-radius: 8px; padding: 20px; }
+.danger-title { color: var(--color-danger); }
 .danger-desc { color: #555; font-size: 14px; margin: 12px 0; line-height: 1.7; }
 .danger-list { color: #555; font-size: 14px; padding-left: 20px; line-height: 1.9; }
 </style>

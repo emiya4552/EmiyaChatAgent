@@ -8,9 +8,9 @@
 
     <div class="page-content">
       <n-spin :show="loading">
-        <div class="template-list">
+        <div class="asset-list">
           <!-- 系统默认（内置）— 非 DB 行，由代码常量定义 -->
-          <div class="template-card builtin-card" @click="$router.push('/templates/default-view')">
+          <div class="asset-card builtin-card" @click="$router.push('/templates/default-view')">
             <div class="card-body">
               <div class="card-name-row">
                 <h3 class="card-name">系统默认（内置）</h3>
@@ -29,7 +29,7 @@
           <div
             v-for="t in templates"
             :key="t.id"
-            :class="['template-card', { 'system-card': t.is_system }]"
+            :class="['asset-card', { 'system-card': t.is_system }]"
             @click="$router.push(`/templates/${t.id}`)"
           >
             <div class="card-body">
@@ -141,43 +141,16 @@ onMounted(load)
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-.page-title { flex: 1; margin: 0; font-size: 20px; white-space: nowrap; }
+/* 卡片皮肤统一到全局 styles/asset-list.css；此处仅留内置/系统模板的差异化描边（走令牌，适配日夜） */
 .page-content { min-height: 200px; }
-.template-list { display: flex; flex-direction: column; gap: 12px; }
-.template-card {
-  display: flex;
-  background: var(--color-bg-surface);
-  border-radius: var(--radius-md);
-  padding: 20px 24px;
-  box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+.asset-card.builtin-card {
+  background: var(--color-primary-bg);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent-strong) 55%, var(--color-border));
 }
-.template-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
-.template-card.builtin-card {
-  background: linear-gradient(135deg, #fefaf3, #fcf4e8);
-  border: 1px dashed #e0c896;
-}
-.template-card.system-card {
-  background: linear-gradient(135deg, #f5f9ff, #eef5ff);
-  border: 1px dashed #b8d4ff;
-}
-.card-body { flex: 1; min-width: 0; }
-.card-name-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.card-name { margin: 0; font-size: 16px; }
-.card-text { margin: 0 0 2px; font-size: 14px; color: var(--color-text-secondary); }
-.card-desc {
-  margin: 0; font-size: 13px; color: var(--color-text-tertiary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 500px;
-}
-.card-actions {
-  display: flex; flex-direction: column; justify-content: center; gap: 4px; margin-left: 16px;
+.asset-card.system-card {
+  background: var(--color-bg-surface-2);
+  border-style: dashed;
+  border-color: var(--color-border);
 }
 </style>

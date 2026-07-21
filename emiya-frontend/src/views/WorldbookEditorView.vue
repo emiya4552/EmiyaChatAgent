@@ -1,10 +1,8 @@
 <template>
   <PageShell>
+    <!-- 返回按钮钉在副导航行（与其它子页一致），不随正文滚动 -->
+    <BackButton to="/worldbooks" label="所有世界书" />
     <div class="page-header">
-      <n-button text @click="$router.push('/worldbooks')">
-        <template #icon><n-icon><ArrowBack /></n-icon></template>
-        返回列表
-      </n-button>
       <h2 class="page-title">
         <n-input v-model:value="book.name" placeholder="世界书名称" />
       </h2>
@@ -90,8 +88,8 @@ import {
   NButton, NIcon, NSpin, NInput, NSwitch, NInputNumber, NModal, NFormItem,
   useMessage,
 } from 'naive-ui'
-import { ArrowBack } from '@vicons/ionicons5'
 import PageShell from '../components/layout/PageShell.vue'
+import BackButton from '../components/layout/BackButton.vue'
 import WorldbookEntryEditor from '../components/worldbook/WorldbookEntryEditor.vue'
 import {
   confirmWorldbookEntryOutputContract,
@@ -357,14 +355,18 @@ async function restoreSelectedEntryOutputContractAuto() {
 .page-title { flex: 1; margin: 0; }
 .editor-layout {
   display: grid; grid-template-columns: 320px 1fr;
-  gap: 16px; height: calc(100vh - 200px); min-height: 500px;
+  gap: 16px;
+  /* 绑定到副导航以下的视口高度：两栏各自独立滚动，页面本身不再整体滚动 */
+  height: calc(100dvh - var(--nav-offset-sub) - 148px);
+  min-height: 340px;
 }
 .entry-list {
   background: var(--color-bg-surface); border-radius: var(--radius-md);
   display: flex; flex-direction: column;
+  min-height: 0; /* 关键：否则条目多时整列被撑高，内部 .entries 不滚、改由页面滚 */
 }
 .list-actions { padding: 12px; border-bottom: 1px solid var(--color-border); }
-.entries { flex: 1; overflow-y: auto; }
+.entries { flex: 1; overflow-y: auto; min-height: 0; }
 .entry-row {
   display: flex; align-items: center; gap: 10px; padding: 10px 14px;
   border-bottom: 1px solid var(--color-border);
@@ -382,5 +384,6 @@ async function restoreSelectedEntryOutputContractAuto() {
 .entry-pane {
   background: var(--color-bg-surface); border-radius: var(--radius-md);
   overflow-y: auto;
+  min-height: 0; /* 详情栏独立滚动，不被左侧列表的滚动带动 */
 }
 </style>

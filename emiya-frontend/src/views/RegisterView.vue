@@ -111,7 +111,7 @@ async function handleRegister() {
       nickname: form.value.nickname,
     })
     message.success('注册成功')
-    router.push('/chat')
+    router.push('/home')
   } catch (err: any) {
     const detail = err.response?.data?.detail || '注册失败'
     message.error(detail)

@@ -1,14 +1,19 @@
 <template>
   <div>
     <div v-if="showTimestamp" class="timestamp-divider">
-      <span>{{ formattedTime }}</span>
+      <span>{{ formattedDate }}</span>
     </div>
-    <div :class="['message-bubble', message.role, { 'message-enter': isLast }]">
+    <div :class="['message-bubble', message.role, { 'message-enter': isLast, 'has-rich-html': hasRichHtml }]">
       <img v-if="message.role === 'assistant' && personaAvatarUrl" class="avatar" :src="personaAvatarUrl" :alt="personaName" />
       <div v-else-if="message.role === 'assistant'" class="avatar" :style="{ background: avatarBg }">
         {{ avatarInitial }}
       </div>
       <div class="bubble-content">
+        <div class="bubble-meta">
+          <strong>{{ authorName }}</strong>
+          <span>·</span>
+          <time :datetime="message.created_at">{{ formattedTime }}</time>
+        </div>
         <template v-if="message.role === 'assistant' && isStreamingMsg">
           <StreamingText :text="displayContent" :is-streaming="true" />
         </template>
@@ -110,8 +115,25 @@ const displayContent = computed(() =>
     : props.message.content,
 )
 
+// 卡自带 UI（状态栏 / 开场 / 创建面板）等"富 HTML"消息：含 <style> / 表格 / 整页 HTML
+// 结构，或整页 HTML 代码块（→ iframe）。这类内容需要一个**确定宽度**的容器，否则卡里的
+// width:100% 在 fit-content 气泡里会塌成 min-content（约 300px）。命中即给气泡 has-rich-html
+// 拉宽 + bubble-content: width:100%，让卡自然撑开。
+const hasRichHtml = computed(() => {
+  const s = displayContent.value || ''
+  return /<\s*style[\s>]/i.test(s)
+    || /<\s*(table|html|body)[\s>]/i.test(s)
+    || /```\s*html/i.test(s)
+    || /class\s*=\s*["'][^"']*(status|stat[-_]|mvu|panel)/i.test(s)
+})
+
 const avatarBg = computed(() => avatarColor(props.personaName || 'AI'))
 const avatarInitial = computed(() => (props.personaName || 'AI')[0])
+const authorName = computed(() =>
+  props.message.role === 'assistant'
+    ? (props.personaName || 'AI')
+    : (authStore.user?.nickname || '我'),
+)
 
 function userAvatarColor(name: string): string {
   return avatarColor(name)
@@ -120,6 +142,10 @@ function userAvatarColor(name: string): string {
 const formattedTime = computed(() => {
   const d = new Date(props.message.created_at)
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+})
+const formattedDate = computed(() => {
+  const d = new Date(props.message.created_at)
+  return d.toLocaleDateString([], { month: 'long', day: 'numeric' })
 })
 
 // 可见输出契约徽章（ADR-1f 稳定诊断结构）：仅 assistant 消息、本轮有激活契约时显示。
@@ -203,8 +229,9 @@ const contractBadge = computed(() => {
 .message-bubble {
   display: flex;
   gap: 10px;
-  padding: 6px 16px;
-  max-width: 65%;
+  width: fit-content;
+  max-width: min(68%, 720px);
+  margin-bottom: 16px;
 }
 .message-bubble.user {
   margin-left: auto;
@@ -212,8 +239,18 @@ const contractBadge = computed(() => {
 }
 .message-bubble.assistant {
   margin-right: auto;
-  /* AI 输出常含状态栏 / 角色卡这类长文本，65% 太挤 */
-  max-width: 80%;
+  max-width: min(76%, 820px);
+}
+/* 富 HTML（卡自带 UI）：气泡默认 width:fit-content 会让卡里的 width:100%/iframe 塌成固有
+   宽度（约 300px）。这里显式给 width:100% 覆盖 fit-content，气泡才有确定宽度，卡的响应式
+   布局（各自的 max-width）就能在里面自然撑开。上限 1040px 避免超宽屏被拉过头。
+   通用规则——不含任何单卡的宽度值。 */
+.message-bubble.assistant.has-rich-html {
+  width: 100%;
+  max-width: min(95%, 1040px);
+}
+.message-bubble.assistant.has-rich-html .bubble-content {
+  width: 100%;
 }
 /* 注：含 iframe HTML 渲染时进一步拓宽的规则在文件底部的非-scoped 块里，
    因为 .th-html-render 是 markdown → v-html 注入的节点，没有 data-v 属性，
@@ -229,18 +266,29 @@ const contractBadge = computed(() => {
   font-weight: 600;
   color: #fff;
   flex-shrink: 0;
+  object-fit: cover;
 }
 .user-avatar {
   font-size: 14px;
   object-fit: cover;
 }
 .bubble-content {
+  min-width: 0;
   padding: 10px 14px;
   border-radius: var(--radius-md);
   background: var(--color-bg-surface);
   box-shadow: var(--shadow-sm);
   line-height: 1.6;
 }
+.bubble-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 5px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+.bubble-meta strong { color: var(--color-text-secondary); font-weight: 500; }
 .assistant .bubble-content {
   border-left: 2px solid var(--color-primary);
 }
@@ -295,6 +343,12 @@ const contractBadge = computed(() => {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+@media (max-width: 720px) {
+  .message-bubble,
+  .message-bubble.assistant { max-width: calc(100vw - 42px); }
+  .avatar { width: 30px; height: 30px; }
+}
 </style>
 
 <!-- 非 scoped：用 :has 选择 v-html 注入的 .th-html-render 时，
@@ -303,6 +357,8 @@ const contractBadge = computed(() => {
      class，不会污染其他组件。 -->
 <style>
 .message-bubble.assistant:has(.th-html-render) {
+  /* width:100% 覆盖基础 fit-content，否则 iframe 的 width:100% 会塌成 300px 固有宽度 */
+  width: 100%;
   max-width: 95%;
 }
 /* 同步让内部气泡填满，避免 bubble-content 自己 width:auto 时仍按内容收缩 */

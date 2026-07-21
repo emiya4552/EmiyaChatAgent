@@ -327,21 +327,21 @@ async function handleSave() {
   gap: 0 16px;
 }
 
-.tab-hint { margin: 8px 0 0; font-size: 12px; color: #999; }
+.tab-hint { margin: 8px 0 0; font-size: 12px; color: var(--color-text-tertiary); }
 
 .prompts-section { margin-top: 0; }
 .prompts-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .prompt-list { display: flex; flex-direction: column; gap: 10px; }
 .prompt-card {
-  background: #f9f9fb;
-  border: 1px solid #e8e8ee;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-light);
   border-radius: 8px;
   padding: 12px;
 }
 .prompt-card-header { display: flex; align-items: center; gap: 8px; }
 .prompt-card-body { margin-top: 10px; }
 .prompt-move { display: flex; flex-direction: column; gap: 0; }
-.prompt-disabled { opacity: 0.5; background: #f0f0f0; }
+.prompt-disabled { opacity: 0.5; }
 .prompts-empty { padding: 24px 0; }
 
 .injection-options {

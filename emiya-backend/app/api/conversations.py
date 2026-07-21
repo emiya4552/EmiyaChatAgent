@@ -28,6 +28,7 @@ from app.services.conversation_service import (
     delete_conversation,
     get_conversation_by_id,
     get_conversation_messages,
+    get_last_message_previews,
     get_user_conversations,
     reload_conversation_mvu_initial_state,
     update_conversation_config,
@@ -58,9 +59,10 @@ def _compute_effective_chat_config(chat_config: dict | None) -> dict:
     return merged
 
 
-def _conv_to_response(c, reply_length_enabled: bool = True):
+def _conv_to_response(c, reply_length_enabled: bool = True, last_message_preview: str | None = None):
     """同步版（用于无 DB 上下文的快路径）。reply_length_enabled 由调用方计算后传入；
-    默认 True 兼容旧调用方——但所有 API 路由都应改用 _conv_to_response_with_derived。"""
+    默认 True 兼容旧调用方——但所有 API 路由都应改用 _conv_to_response_with_derived。
+    last_message_preview 仅列表接口传入（其它路径留空）。"""
     chat_config = c.chat_config or {}
     return ConversationResponse(
         id=c.id,
@@ -85,6 +87,7 @@ def _conv_to_response(c, reply_length_enabled: bool = True):
         variables=c.variables or {},
         mvu_state=describe_conversation_mvu_state(c.variables or {}),
         mvu_capabilities=c.mvu_capabilities or {},
+        last_message_preview=last_message_preview,
         created_at=c.created_at,
         updated_at=c.updated_at,
     )
@@ -144,12 +147,16 @@ async def list_conversations(
 ):
     """获取当前用户的对话列表。"""
     conversations = await get_user_conversations(db, current_user.id)
+    # 一次取所有对话的末条消息预览（避免 N+1），供首页最近对话卡片展示
+    previews = await get_last_message_previews(db, [c.id for c in conversations])
     # cache 复用同一模板的 reply_length 查询，避免 N+1
     cache: dict[UUID | None, bool] = {}
     out: list[ConversationResponse] = []
     for c in conversations:
         rle = await _compute_reply_length_enabled(db, c.template_id, cache=cache)
-        out.append(_conv_to_response(c, reply_length_enabled=rle))
+        out.append(_conv_to_response(
+            c, reply_length_enabled=rle, last_message_preview=previews.get(c.id),
+        ))
     return out
 
 
