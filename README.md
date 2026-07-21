@@ -1,266 +1,133 @@
-# EMIYA / chatAgent
+# EMIYA
 
-EMIYA 是一个面向角色卡聊天、世界书、记忆、情绪关系和 Prompt 模板编排的 AI Chat 项目。
+EMIYA 是一个面向**角色扮演与情感陪伴**的 AI 对话平台。你可以导入或创建 AI 角色卡，围绕它进行长期对话——系统会记住聊过的事、感知情绪的起伏、积累好感与关系，并兼容 SillyTavern 生态的角色卡、世界书、预设与正则。
 
-项目采用前后端分离架构：
+**特点一览**
 
-- 后端：FastAPI + SQLAlchemy Async + LangGraph + PostgreSQL + Redis + ChromaDB
-- 前端：Vue 3 + Pinia + Naive UI + Vite
-- LLM：当前以 DeepSeek API 为主要调用目标
+- 🎭 **兼容 SillyTavern 生态**：导入 / 导出 PNG·JSON 角色卡（v1/v2/v3），世界书、ST 预设、正则脚本、MVU 变量卡开箱即用。
+- 🧠 **长期记忆**：自动提取对话中的长期记忆并做语义检索，越聊越懂你。
+- ❤️ **情绪与关系**：识别情绪、记录心情、积累好感度与关系等级，带情绪仪表盘与里程碑。
+- 🌍 **世界书 + 预设 + 模板**：按关键词/常驻规则注入设定，ST 风格 prompt 编排，可视化编辑器。
+- 🎨 **前端可自定义**：内置日/夜暖色主题，支持用户级全站 CSS 换肤（令牌契约 + 起手预设 + 逃生模式）。
+- ⚡ **流式对话**：SSE 流式回复，前端支持 Markdown 与整页 HTML 状态栏渲染。
 
-核心目标是让用户导入或创建 AI 角色卡，并围绕角色卡进行长期对话。系统支持对话记忆、情绪记录、关系等级、世界书注入、ST 风格预设、正则后处理、Prompt 模板、CSS 主题，以及部分 MVU / Tavern 系角色卡兼容能力。
+**技术栈**
 
----
-
-## 功能概览
-
-- 用户注册、登录、JWT 鉴权
-- AI 角色卡管理
-- 用户人设管理
-- PNG 角色卡导入 / 导出
-- 对话创建、删除、消息流式生成
-- SSE 流式回复与 live 旁观流
-- 长期记忆提取与 ChromaDB 语义检索
-- 情绪识别、情绪仪表盘
-- 好感度 / 关系等级系统
-- 世界书管理、导入、导出、绑定与激活
-- Author's Note 注入
-- ST 预设导入、绑定与 prompt 注入
-- 正则预设导入与 prompt / reply 阶段处理
-- Prompt 模板编辑器
-- 账户设置、头像上传、改密码、注销
-- 前端 Markdown / HTML iframe 渲染
-- 用户级与角色级 CSS 主题注入
-- MVU 兼容基础能力：变量桶、EJS 条件、MacroEngine、`<UpdateVariable>` 基础解析
-
----
-
-## 目录结构
-
-```text
-charAgent/
-├── emiya-backend/          FastAPI 后端
-│   ├── app/
-│   │   ├── api/            HTTP API 路由
-│   │   ├── models/         SQLAlchemy ORM
-│   │   ├── schemas/        Pydantic 请求 / 响应模型
-│   │   ├── services/       业务逻辑
-│   │   ├── utils/          JWT、异常、限流、token 工具
-│   │   ├── config.py       配置读取
-│   │   ├── database.py     数据库连接
-│   │   └── main.py         FastAPI 入口
-│   ├── alembic/            数据库迁移
-│   ├── scripts/            开发脚本
-│   ├── tests/              后端测试
-│   └── requirements.txt
-├── emiya-frontend/         Vue 3 前端
-│   ├── src/
-│   │   ├── api/            axios API 封装
-│   │   ├── components/     UI 组件
-│   │   ├── stores/         Pinia 状态
-│   │   ├── views/          页面
-│   │   ├── router/         路由
-│   │   ├── utils/          Markdown、头像、正则等工具
-│   │   └── types/          TypeScript 类型
-│   └── package.json
-├── docs/                   架构文档、ADR、调研笔记
-├── docker-compose.yml      PostgreSQL / Redis / ChromaDB
-├── .env.example            环境变量示例
-└── README.md
-```
-
----
-
-## 环境要求
-
-- Python 3.11+
-- Node.js 20+
-- Docker / Docker Compose
-- Git
-
-建议使用虚拟环境管理 Python 依赖。
+- 后端：FastAPI · SQLAlchemy(Async) · LangGraph · PostgreSQL · Redis · ChromaDB
+- 前端：Vue 3 · TypeScript · Pinia · Naive UI · Vite
+- LLM：DeepSeek API
 
 ---
 
 ## 快速启动
 
+**环境要求**：Python 3.11+ · Node.js 20+ · Docker（含 Compose）
+
 ### 1. 启动基础服务
 
-在项目根目录运行：
+在仓库根目录：
 
 ```bash
 docker compose up -d
 ```
 
-这会启动：
-
-- PostgreSQL: `localhost:5432`
-- Redis: `localhost:6379`
-- ChromaDB: `localhost:8001`
+会拉起 PostgreSQL(`5432`)、Redis(`6379`)、ChromaDB(`8001`)，端口已与 `.env.example` 默认值对齐。
 
 ### 2. 配置环境变量
-
-复制环境变量示例：
 
 ```bash
 cp .env.example .env
 ```
 
-根据本地情况修改 `.env`：
-
-```env
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-
-DATABASE_URL=postgresql+asyncpg://emiya:emiya_dev_2026@localhost:5432/emiya
-REDIS_URL=redis://localhost:6379/0
-
-JWT_SECRET_KEY=your_jwt_secret_key_here
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=10080
-```
-
+**最少只需填一项** `DEEPSEEK_API_KEY`（数据库 / Redis / JWT 的默认值已与 docker-compose 对齐，可直接跑）。生产环境记得把 `JWT_SECRET_KEY` 换成长随机串。
 
 ### 3. 启动后端
 
-进入后端目录：
-
 ```bash
 cd emiya-backend
-```
-
-创建并激活虚拟环境后安装依赖：
-
-```bash
-pip install -r requirements.txt
-```
-
-执行数据库迁移：
-
-```bash
-alembic upgrade head
-```
-
-启动后端：
-
-```bash
+pip install -r requirements.txt      # 建议先建虚拟环境
+alembic upgrade head                 # 数据库迁移
 uvicorn app.main:app --reload --port 8000
 ```
 
-健康检查：
-
-```text
-http://localhost:8000/health
-```
+健康检查：<http://localhost:8000/health>
 
 ### 4. 启动前端
 
-进入前端目录：
-
 ```bash
 cd emiya-frontend
-```
-
-安装依赖：
-
-```bash
 npm install
-```
-
-启动开发服务器：
-
-```bash
 npm run dev
 ```
 
-默认访问：
+访问 <http://localhost:5173>，注册账号即可开始。
+
+---
+
+## 项目结构
 
 ```text
-http://localhost:5173
+charAgent/
+├── emiya-backend/          FastAPI 后端
+│   ├── app/
+│   │   ├── api/            HTTP / SSE 路由
+│   │   ├── models/         SQLAlchemy ORM
+│   │   ├── schemas/        Pydantic 请求 / 响应模型
+│   │   ├── services/       业务逻辑（聊天流程、记忆、情绪、世界书、MVU…）
+│   │   ├── utils/          JWT、限流、token 计数等工具
+│   │   ├── config.py       环境变量配置
+│   │   └── main.py         应用入口
+│   ├── alembic/            数据库迁移
+│   └── tests/              后端测试
+├── emiya-frontend/         Vue 3 前端
+│   └── src/
+│       ├── api/            接口封装
+│       ├── components/     UI 组件
+│       ├── views/          页面
+│       ├── stores/         Pinia 状态
+│       ├── composables/    组合式逻辑（CSS 注入、iframe 渲染等）
+│       └── styles/         主题令牌与全局样式
+├── docs/                   架构文档、ADR、调研笔记（未纳入版本库）
+├── docker-compose.yml      PostgreSQL / Redis / ChromaDB
+└── .env.example            环境变量示例
 ```
 
 ---
 
+## 功能特点详述
 
+### 角色卡生态（兼容 SillyTavern）
 
-## 关键模块
+角色卡是一切的核心。你可以手动创建，也可以直接导入社区流行的 ST 角色卡——支持 PNG 内嵌与 JSON，兼容 v1/v2/v3 格式，连带卡自带的世界书、正则脚本、CSS 美化样式一并识别。导出同样回填为标准格式，可带回 ST 生态使用。围绕角色卡还有三套配套系统：
 
-### 聊天主流程
+- **世界书**：按关键词触发或常驻注入设定条目，遵循 ST 风格的 position / depth 语义，支持 EJS 条件动态裁剪内容。
+- **预设**：导入 ST 风格预设，控制 prompt 各段的注入顺序、开关与采样参数。
+- **Prompt 模板**：可视化编辑对话 prompt 的基础骨架结构。
+- **正则预设**：在 prompt 阶段与回复阶段对文本做正则后处理（隐藏标签、美化状态栏等）。
 
-核心文件：
+### 长期陪伴（记忆 · 情绪 · 关系）
 
-- `emiya-backend/app/api/chat.py`
-- `emiya-backend/app/services/chat_service.py`
-- `emiya-backend/app/services/langgraph/chat_graph.py`
-- `emiya-backend/app/services/langgraph/nodes.py`
-- `emiya-frontend/src/api/chat.ts`
-- `emiya-frontend/src/stores/chat.ts`
+让对话「有连续性、有温度」是 EMIYA 的立身之本：
 
-大致流程：
+- **记忆系统**：对话中自动提取值得记住的长期信息，分门别类存入向量库；后续对话按语义相似度 + 时间衰减检索回注，并做去重与矛盾检测。提取频率随记忆量自适应（记得少时密集、记得多时稀疏）。
+- **情绪感知**：识别每轮对话的情绪标签，沉淀为可视化的情绪仪表盘与日历。
+- **关系系统**：随互动积累好感度、推进关系等级，触发「第一次深聊」「连续 7 天」等里程碑。
 
-```text
-前端发送消息
-→ 后端保存 user message
-→ LangGraph 执行情绪 / 记忆 / 世界书 / 画像 / 关系 / Prompt 组装
-→ DeepSeek 流式生成
-→ assistant 文本后处理
-→ 保存 assistant message
-→ SSE 推送 message_done
-```
+### MVU 变量卡兼容
 
-### 世界书
+面向重逻辑的「游戏化」角色卡，EMIYA 兼容 MVU（Model Variable Update）体系：变量桶持久化、EJS 真 JS 求值、宏引擎、`<UpdateVariable>` 状态写回，并提供浏览器侧 MVU 运行时来渲染卡自带的可交互 UI（状态栏、面板等）。
 
-核心文件：
+### 渲染与前端自定义
 
-- `emiya-backend/app/services/worldbook/scanner.py`
-- `emiya-backend/app/services/worldbook/injector.py`
-- `emiya-backend/app/services/worldbook/import_export.py`
-- `emiya-backend/app/api/worldbooks.py`
-- `emiya-frontend/src/views/WorldbookManageView.vue`
-- `emiya-frontend/src/views/WorldbookEditorView.vue`
+- **富渲染**：AI 回复经 Markdown 管线渲染，自定义标签受控放行；整页 HTML 状态栏放进沙箱 iframe 隔离渲染，高度自适应。
+- **主题与换肤**：内置暖色「故事纸」日/夜双主题。用户可写全站 CSS 自定义前端——以稳定的设计令牌为受支持接口，配合起手预设与 `?safe` 逃生模式，改坏了也能一键复原。角色卡自带样式与用户主题通过 CSS `@layer` 分层，互不打架。
 
-世界书负责按关键词或常驻规则激活设定条目，并按 ST 风格 position 注入 Prompt。
+### 输出契约
 
-### Prompt 模板与预设
+对需要稳定结构化输出的场景（如固定格式的状态栏 / 面板），提供「可见输出格式执行」能力：从注入约束、到确定性修复、到缺失片段续写等多档模式，尽量保证 AI 输出符合声明的结构。
 
-核心文件：
+### 账户与配置
 
-- `emiya-backend/app/services/prompt_renderer.py`
-- `emiya-backend/app/services/preset_injector.py`
-- `emiya-backend/app/services/preset_service.py`
-- `emiya-backend/app/services/template_service.py`
-- `emiya-frontend/src/views/TemplateEditorView.vue`
-- `emiya-frontend/src/views/PresetFormView.vue`
-
-Prompt 模板控制基础结构，预设控制 ST 风格 prompt 注入与采样配置。
-
-### 正则与 assistant 后处理
-
-核心文件：
-
-- `emiya-backend/app/services/regex_processor.py`
-- `emiya-backend/app/services/message_pipeline.py`
-- `emiya-backend/app/services/regex_preset_service.py`
-
-assistant 文本后处理当前包括：
-
-```text
-MacroEngine
-→ reply 阶段正则
-→ MVU <UpdateVariable> 基础解析
-```
-
-### MVU 兼容
-
-核心文件：
-
-- `emiya-backend/app/services/ejs_engine.py`
-- `emiya-backend/app/services/macro_engine.py`
-- `emiya-backend/app/services/message_pipeline.py`
-- `emiya-backend/app/services/persona_import_service.py`
-- `emiya-backend/app/services/langgraph/nodes.py`
-
-当前 MVU 兼容属于基础兼容，不是完整复刻 ST 的 JS 运行时。
-
----
-
+- **认证**：注册 / 登录 / JWT 鉴权、多设备会话管理、邮箱找回密码。
+- **账户设置**：昵称、头像、改密码、注销，以及记忆 / token 预算等偏好。
+- **三层配置**：全局默认 → 账户级 → 单对话覆盖，多数参数可在对话内即时调整而不影响他人默认。

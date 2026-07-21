@@ -10,10 +10,11 @@ venv/
 node_modules/
 dist/
 
-# Environment
+# Environment（忽略所有 env，仅保留模板与已提交的前端 dev 配置）
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.development
 
 # IDE / Editor
 .codebuddy/
@@ -49,4 +50,25 @@ CONTEXT.md
 CLAUDE.md
 AGENTS.md
 GIT_VERSION_CONTROL.md
-.git.backup
+
+# Python —— 测试/类型/lint 缓存 + 覆盖率
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# 前端 —— vitest 覆盖率 + 缓存 + Vite 约定
+coverage/
+.eslintcache
+*.local
+
+# 运行时
+logs/
+*.sqlite3
+*.db
+
+# agent 目录
+.codex/
+
