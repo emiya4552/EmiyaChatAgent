@@ -116,12 +116,19 @@ def build_prompt_budget_plan(
     prefix_messages: list[dict],
     chat_config: dict | None,
     reply_length: str | None,
+    overhead_tokens: int = 0,
 ) -> PromptBudgetPlan:
+    """规划历史预算。
+
+    `overhead_tokens` 计入那些「不在 prefix_messages 里、但裁剪后才注入」的固定
+    system 开销（当前用于预设：见 nodes.node_build_prompt）。不纳入的话
+    history_available 会系统性高估、最终 prompt 超 max_context。
+    """
     max_context = resolve_max_context(chat_config)
     reserved_output = resolve_reply_max_tokens(chat_config, reply_length)
     safety_margin = resolve_safety_margin(chat_config)
     history_cap = resolve_history_budget_cap(chat_config)
-    prefix_tokens = count_message_tokens(prefix_messages)
+    prefix_tokens = count_message_tokens(prefix_messages) + max(0, overhead_tokens)
     history_available = max(0, max_context - reserved_output - safety_margin - prefix_tokens)
     history_budget = min(history_available, history_cap) if history_cap > 0 else history_available
     return PromptBudgetPlan(
@@ -148,7 +155,11 @@ def build_token_budget_report(
     worldbook_budget: dict[str, int | bool],
 ) -> dict[str, Any]:
     dropped_tokens = max(0, history_candidate_tokens - history_tokens)
-    remaining_context = max(0, plan.max_context - final_prompt_tokens - plan.reserved_output)
+    projected_total = final_prompt_tokens + plan.reserved_output
+    remaining_context = max(0, plan.max_context - projected_total)
+    # 前置称重（预设 overhead）后仍越界，多因 system 前缀本身超预算（预设/世界书/persona
+    # 过大，历史已裁至下限仍不足），或 squash/正则/depth 溢出的残差。供调用方兜底告警。
+    budget_overflow_tokens = max(0, projected_total - plan.max_context)
     return {
         **plan.to_dict(),
         "history_tokens": history_tokens,
@@ -158,6 +169,8 @@ def build_token_budget_report(
         "history_candidate_messages": history_candidate_messages,
         "final_prompt_tokens": final_prompt_tokens,
         "remaining_context": remaining_context,
+        "over_budget": budget_overflow_tokens > 0,
+        "budget_overflow_tokens": budget_overflow_tokens,
         "worldbook": {
             "budget": int(worldbook_budget.get("budget") or 0),
             "used": worldbook_used_tokens,

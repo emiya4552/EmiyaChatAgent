@@ -33,7 +33,7 @@ from app.services.conversation_service import (
     reload_conversation_mvu_initial_state,
     update_conversation_config,
 )
-from app.services.config_registry import system_default_chat_config
+from app.services.config_registry import account_budget_defaults, system_default_chat_config
 from app.services.mvu_runtime import (
     build_mvu_policy_for_user_persona,
     describe_conversation_mvu_state,
@@ -46,12 +46,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/conversations", tags=["对话"])
 
 
-def _compute_effective_chat_config(chat_config: dict | None) -> dict:
-    """系统默认 ∪ chat_config（后者优先）。用于前端配置面板回显当前生效值。
+def _compute_effective_chat_config(
+    chat_config: dict | None, account_config: dict | None = None
+) -> dict:
+    """全局系统默认 → 账户默认 → chat_config（后者优先）。用于前端配置面板回显当前生效值。
 
-    系统默认取自 config_registry（单一事实源）。
+    **token 预算三层的中间层（账户默认）必须并入**，否则设了账户级默认（如 openai_max_context）
+    的对话在面板里仍显示全局默认，与运行时读取点 `nodes.py::node_build_prompt` 的
+    `budget_cc = {**account_budget_defaults, **chat_config}` 不一致。账户/系统默认均取自
+    config_registry（单一事实源）。
     """
     merged = system_default_chat_config()
+    merged.update(account_budget_defaults(account_config))
     if chat_config:
         for k, v in chat_config.items():
             if v is not None:
@@ -59,7 +65,7 @@ def _compute_effective_chat_config(chat_config: dict | None) -> dict:
     return merged
 
 
-def _conv_to_response(c, reply_length_enabled: bool = True, last_message_preview: str | None = None):
+def _conv_to_response(c, reply_length_enabled: bool = True, last_message_preview: str | None = None, account_config: dict | None = None):
     """同步版（用于无 DB 上下文的快路径）。reply_length_enabled 由调用方计算后传入；
     默认 True 兼容旧调用方——但所有 API 路由都应改用 _conv_to_response_with_derived。
     last_message_preview 仅列表接口传入（其它路径留空）。"""
@@ -74,7 +80,7 @@ def _conv_to_response(c, reply_length_enabled: bool = True, last_message_preview
         preset_id=c.preset_id,
         preset_name=c.preset.name if c.preset else None,
         chat_config=chat_config,
-        effective_chat_config=_compute_effective_chat_config(chat_config),
+        effective_chat_config=_compute_effective_chat_config(chat_config, account_config),
         template_id=c.template_id,
         regex_preset_id=c.regex_preset_id,
         worldbook_ids=[str(x) for x in (c.worldbook_ids or [])],
@@ -137,7 +143,9 @@ async def _compute_reply_length_enabled(
 async def _conv_to_response_with_derived(c, db: AsyncSession):
     """带 derived 字段的异步版（reply_length_enabled 等需要查 DB 的字段）。"""
     rle = await _compute_reply_length_enabled(db, c.template_id)
-    return _conv_to_response(c, reply_length_enabled=rle)
+    # 账户级预算默认要并入 effective 回显（对话按 user_id 归属，取其账户配置一次主键查）。
+    account_config = await db.scalar(select(User.account_config).where(User.id == c.user_id))
+    return _conv_to_response(c, reply_length_enabled=rle, account_config=account_config or {})
 
 
 @router.get("", response_model=list[ConversationResponse])
@@ -156,6 +164,7 @@ async def list_conversations(
         rle = await _compute_reply_length_enabled(db, c.template_id, cache=cache)
         out.append(_conv_to_response(
             c, reply_length_enabled=rle, last_message_preview=previews.get(c.id),
+            account_config=current_user.account_config,
         ))
     return out
 

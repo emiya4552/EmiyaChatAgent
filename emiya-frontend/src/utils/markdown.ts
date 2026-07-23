@@ -6,7 +6,7 @@ import DOMPurify from 'dompurify'
 // 详见 docs/adr/0008-frontend-rendering-and-css-theme.md
 
 // ─── marked 配置 ───
-// 禁用删除线（AI 情感陪伴场景常用 ~ 表达语气，不应该被转成 <del>）
+// 禁用删除线（AI chat场景常用 ~ 表达语气，不应该被转成 <del>）
 const renderer = new Renderer()
 renderer.del = ({ text }: { text: string }) => text
 

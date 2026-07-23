@@ -64,6 +64,24 @@ def test_account_budget_defaults_subset_only_set_keys():
     }
 
 
+def test_effective_chat_config_includes_account_budget_default():
+    """回归：对话设置面板的 effective 回显必须并入账户级预算默认。
+
+    否则设了账户默认（如 openai_max_context=200000）却仍显示全局默认（80000），
+    与运行时读取点 nodes.py::node_build_prompt 的 budget_cc 不一致。
+    见 api/conversations.py::_compute_effective_chat_config。
+    """
+    from app.api.conversations import _compute_effective_chat_config
+
+    acc = {"openai_max_context": 200000}
+    # 新对话、无预设 → chat_config 空：应回显账户默认 200000，而非全局默认
+    assert _compute_effective_chat_config({}, acc)["openai_max_context"] == 200000
+    # 对话覆盖仍赢过账户默认
+    assert _compute_effective_chat_config({"openai_max_context": 123456}, acc)["openai_max_context"] == 123456
+    # 无账户默认 → 退回全局默认（保持旧行为）
+    assert _compute_effective_chat_config({}, {})["openai_max_context"] == settings.MAX_CONTEXT_TOKENS
+
+
 def test_filter_account_config_whitelist_clamp_null():
     clean, dropped = reg.filter_account_config({
         "memory_top_k": 999,      # 钳到 20

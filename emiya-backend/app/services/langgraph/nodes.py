@@ -231,10 +231,13 @@ async def node_activate_worldbook(state: ChatState) -> dict:
             history = [{"role": m.role, "content": m.content} for m in msgs_result.scalars().all()]
 
         chat_cfg = conv.chat_config or {}
+        # token 预算三层（ADR-4）：账户默认垫底 < 对话覆盖，与 node_build_prompt 的 budget_cc 一致。
+        # 否则账户级世界书预算默认（worldbook_budget_pct/cap）在扫描期被无视、退回全局。
+        budget_cfg = {**account_budget_defaults(state.get("account_config")), **chat_cfg}
         activated = scan_worldbook(
             worldbooks=book_dicts,
             history_messages=history,
-            chat_config=chat_cfg,
+            chat_config=budget_cfg,
         )
 
         # ActiveEntry 是运行时对象；LangGraph state 里只保留可序列化字段。
@@ -699,10 +702,23 @@ async def node_build_prompt(state: ChatState) -> dict:
             }
             for entry in wi_for_budget
         ]
+        # 预设注入是 system 前缀的大头，但真正注入在历史裁剪之后（见下方 PresetInjector.inject）。
+        # 这里先加载 + 称重，把其 token 开销计入预算，否则 history_available 系统性高估、
+        # 最终 prompt 超 max_context。同一份 preset 在下方注入时复用，不重复查库。
+        preset_for_injection = (
+            await get_preset_for_injection(db, conv.preset_id) if conv.preset_id else None
+        )
+        preset_overhead_tokens = (
+            PresetInjector.estimate_injection_tokens(
+                preset_for_injection, scope, run_ejs=mvu_policy.run_ejs,
+            )
+            if preset_for_injection else 0
+        )
         budget_plan = build_prompt_budget_plan(
             prefix_messages=rendered + wi_budget_messages,
             chat_config=budget_cc,
             reply_length=state.get("reply_length", "medium"),
+            overhead_tokens=preset_overhead_tokens,
         )
         truncated = _truncate_history(recent, max(budget_plan.history_budget, 100))
         # 历史消息只在本轮 prompt 中按当前 scope 渲染，不把渲染结果写回数据库。
@@ -780,12 +796,11 @@ async def node_build_prompt(state: ChatState) -> dict:
         ]
 
         # ── 预设注入 ──
-        if conv.preset_id:
-            preset = await get_preset_for_injection(db, conv.preset_id)
-            if preset:
-                rendered = PresetInjector.inject(
-                    rendered, preset, scope, run_ejs=mvu_policy.run_ejs,
-                )
+        # preset 已在上方预算称重时加载（preset_for_injection），此处复用同一份。
+        if preset_for_injection:
+            rendered = PresetInjector.inject(
+                rendered, preset_for_injection, scope, run_ejs=mvu_policy.run_ejs,
+            )
 
         # ── promptOnly 正则后处理 ──
         # 这里处理的是"发给 LLM 之前"的正则脚本，只会取 promptOnly=true 的脚本。
@@ -874,6 +889,18 @@ async def node_build_prompt(state: ChatState) -> dict:
             ),
             worldbook_budget=resolve_worldbook_budget(budget_cc),
         )
+
+        # 兜底：前置称重（预设 overhead）后仍越界，说明 system 前缀本身超预算
+        # （历史已裁至下限仍不足），或 squash/正则/depth 溢出的残差。此处只暴露、不再二次裁剪。
+        if token_budget_report.get("over_budget"):
+            logger.warning(
+                "[提示词注入] 预算越界：最终 prompt %d + 预留输出 %d 超过 max_context %d（超 %d token）。"
+                "多因 system 前缀（预设/世界书/persona）过大，历史已裁至下限仍不足。",
+                token_budget_report["final_prompt_tokens"],
+                budget_plan.reserved_output,
+                budget_plan.max_context,
+                token_budget_report["budget_overflow_tokens"],
+            )
 
         if truncated:
             _log_messages(rendered, persona.name if persona else "无角色")
