@@ -2,7 +2,7 @@
   <div class="auth-container">
     <div class="auth-card">
       <h1 class="auth-title">EMIYA</h1>
-      <p class="auth-subtitle">AI 情感陪伴</p>
+      <p class="auth-subtitle">AI chat</p>
 
       <n-form ref="formRef" :model="form" :rules="rules" size="large">
         <n-form-item path="email" label="邮箱">
